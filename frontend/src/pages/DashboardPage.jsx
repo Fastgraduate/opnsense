@@ -1,215 +1,419 @@
-import { useMemo } from 'react'
-import SystemInfoCard from '../components/dashboard/SystemInfoCard'
-import GaugeCard from '../components/dashboard/GaugeCard'
 import DonutChartCard from '../components/dashboard/DonutChartCard'
-import ServiceCard from '../components/dashboard/ServiceCard'
-import TrafficCard from '../components/dashboard/TrafficCard'
+import InfoTableCard from '../components/dashboard/InfoTableCard'
+import MultiDonutChartCard from '../components/dashboard/MultiDonutChartCard'
+import StatCard from '../components/dashboard/StatCard'
+import SystemInfoCard from '../components/dashboard/SystemInfoCard'
+import TrafficAreaChartCard from '../components/dashboard/TrafficAreaChartCard'
 
 function DashboardPage({
   product,
   status,
-  rules = [],
   system,
+  systemSummary,
   interfaces,
   services,
   traffic,
+  memory,
+  memorySummary,
+  disk,
+  diskSummary,
+  rules,
+  aliases,
   autoRefresh,
+  loading,
+  trafficHistory,
+  currentInterfaceStats,
 }) {
-  const dashboardStats = useMemo(() => {
-    const totalRules = rules.length
-    const passRules = rules.filter((r) => r.action === 'pass').length
-    const blockRules = rules.filter((r) => r.action === 'block').length
+  const toNumber = (value) => {
+    if (value === null || value === undefined) return 0
+    if (typeof value === 'number') return Number.isFinite(value) ? value : 0
 
-    const lanRules = rules.filter((r) => r.interface === 'lan').length
-    const wanRules = rules.filter((r) => r.interface === 'wan').length
-    const internalRules = rules.filter(
-      (r) => r.interface !== 'lan' && r.interface !== 'wan',
-    ).length
+    const cleaned = String(value).replace(/[^\d.-]/g, '')
+    const num = Number(cleaned)
+    return Number.isFinite(num) ? num : 0
+  }
 
-    const cpuPercent =
-      Number(system?.cpu?.usage ?? system?.cpu_usage ?? system?.cpu ?? 0) ||
-      Math.min(15 + totalRules * 4, 92)
+  const formatNumber = (value) => toNumber(value).toLocaleString()
 
-    const memoryPercent =
-      Number(
-        system?.memory?.used_percent ??
-          system?.memory_percent ??
-          system?.memory?.used ??
-          18,
-      ) || 18
+  const pickDisplayValue = (value) => {
+    if (value === null || value === undefined) return '-'
 
-    const diskPercent =
-      Number(
-        system?.disk?.used_percent ??
-          system?.disk_percent ??
-          system?.storage?.used ??
-          13,
-      ) || 13
-
-    return {
-      totalRules,
-      passRules,
-      blockRules,
-      lanRules,
-      wanRules,
-      internalRules,
-      cpuPercent,
-      memoryPercent,
-      diskPercent,
-    }
-  }, [rules, system])
-
-  const interfaceItems = useMemo(() => {
-    if (!interfaces) {
-      return [
-        { label: 'WAN', value: dashboardStats.wanRules, color: '#2ecc71' },
-        { label: 'LAN', value: dashboardStats.lanRules, color: '#f39c12' },
-        {
-          label: 'Internal',
-          value: dashboardStats.internalRules,
-          color: '#3498db',
-        },
-      ]
+    if (
+      typeof value === 'string' ||
+      typeof value === 'number' ||
+      typeof value === 'boolean'
+    ) {
+      return String(value)
     }
 
-    let wanCount = 0
-    let lanCount = 0
-    let internalCount = 0
+    if (Array.isArray(value)) {
+      return value.map((item) => pickDisplayValue(item)).join(', ')
+    }
 
-    const values = Array.isArray(interfaces)
-      ? interfaces
-      : Object.values(interfaces)
+    if (typeof value === 'object') {
+      if (value.ipaddr !== undefined) return pickDisplayValue(value.ipaddr)
+      if (value.address !== undefined) return pickDisplayValue(value.address)
+      if (value.value !== undefined) return pickDisplayValue(value.value)
+      if (value.text !== undefined) return pickDisplayValue(value.text)
 
-    values.forEach((iface) => {
-      const name = (iface?.identifier || iface?.name || iface?.if || '')
-        .toString()
-        .toLowerCase()
+      const firstPrimitive = Object.values(value).find(
+        (v) =>
+          typeof v === 'string' ||
+          typeof v === 'number' ||
+          typeof v === 'boolean',
+      )
 
-      if (name.includes('wan')) wanCount += 1
-      else if (name.includes('lan')) lanCount += 1
-      else internalCount += 1
-    })
+      if (firstPrimitive !== undefined) return String(firstPrimitive)
+      return JSON.stringify(value)
+    }
 
-    return [
-      {
-        label: 'WAN',
-        value: wanCount || dashboardStats.wanRules,
-        color: '#2ecc71',
-      },
-      {
-        label: 'LAN',
-        value: lanCount || dashboardStats.lanRules,
-        color: '#f39c12',
-      },
-      {
-        label: 'Internal',
-        value: internalCount || dashboardStats.internalRules,
-        color: '#3498db',
-      },
-    ]
-  }, [interfaces, dashboardStats])
+    return String(value)
+  }
 
-  const serviceList = useMemo(() => {
+  const parseSizeStringToBytes = (value) => {
+    if (!value) return 0
+    if (typeof value === 'number') return value
+
+    const text = String(value).trim().toUpperCase()
+    const match = text.match(/^([\d.]+)\s*([KMGTP]?)(I?B)?$/)
+
+    if (!match) return 0
+
+    const amount = Number(match[1])
+    const unit = match[2]
+
+    const unitMap = {
+      '': 1,
+      K: 1024,
+      M: 1024 ** 2,
+      G: 1024 ** 3,
+      T: 1024 ** 4,
+      P: 1024 ** 5,
+    }
+
+    return amount * (unitMap[unit] || 1)
+  }
+
+  const normalizeServices = () => {
     if (!services) return []
-
     if (Array.isArray(services)) return services
-    if (Array.isArray(services.rows)) return services.rows
-    if (Array.isArray(services.items)) return services.items
+    if (Array.isArray(services?.rows)) return services.rows
+    if (Array.isArray(services?.data)) return services.data
+    return []
+  }
+
+  const normalizeInterfaces = () => {
+    if (!interfaces) return []
+    if (Array.isArray(interfaces)) return interfaces
+    if (Array.isArray(interfaces?.rows)) return interfaces.rows
+    if (Array.isArray(interfaces?.data)) return interfaces.data
+
+    if (typeof interfaces === 'object') {
+      return Object.entries(interfaces).map(([name, value]) => ({
+        name,
+        ...(typeof value === 'object' ? value : { value }),
+      }))
+    }
 
     return []
-  }, [services])
+  }
+
+  const serviceRows = normalizeServices()
+  const interfaceRows = normalizeInterfaces()
+
+  const activeServiceCount = serviceRows.filter((svc) => {
+    const running = String(
+      svc?.running ?? svc?.status ?? svc?.state ?? '',
+    ).toLowerCase()
+    return ['1', 'true', 'running', 'up', 'active'].includes(running)
+  }).length
+
+  const firmwareVersion =
+    product?.product_version ||
+    product?.version ||
+    status?.product?.product_version ||
+    status?.product_version ||
+    '-'
+
+  const firmwareName =
+    product?.product_name ||
+    product?.name ||
+    status?.product?.product_name ||
+    'OPNsense'
+
+  const interfaceTableRows = interfaceRows.map((row, idx) => ({
+    id: `${idx}-${pickDisplayValue(row?.identifier || row?.name || row?.if || `interface-${idx + 1}`)}`,
+    name: pickDisplayValue(
+      row?.identifier || row?.name || row?.if || `interface-${idx + 1}`,
+    ),
+    description: pickDisplayValue(
+      row?.description || row?.descr || row?.friendly_name || '-',
+    ),
+    ip: pickDisplayValue(
+      row?.ipaddr || row?.ip || row?.address || row?.ipv4 || '-',
+    ),
+    status: pickDisplayValue(
+      row?.status || row?.link_state || row?.state || '-',
+    ),
+  }))
+
+  const mem = {
+    total: memorySummary?.total || 0,
+    used: memorySummary?.used || 0,
+    free: memorySummary?.free || 0,
+    used_percent: memorySummary?.used_percent || 0,
+    source: memorySummary?.source || '-',
+  }
+
+  const diskInfo = {
+    device: diskSummary?.device || '-',
+    mountpoint: diskSummary?.mountpoint || '-',
+    blocks: diskSummary?.blocks || '0 B',
+    used: diskSummary?.used || '0 B',
+    available: diskSummary?.available || '0 B',
+    used_pct: diskSummary?.used_pct || 0,
+    totalValue: parseSizeStringToBytes(diskSummary?.blocks),
+    usedValue: parseSizeStringToBytes(diskSummary?.used),
+    freeValue: parseSizeStringToBytes(diskSummary?.available),
+  }
+
+  const normalizeRuleInterface = (rule) => {
+    const raw =
+      rule?.interface ||
+      rule?.if ||
+      rule?.interfaces ||
+      rule?.descr ||
+      rule?.description ||
+      ''
+
+    const text = String(raw).trim().toLowerCase()
+
+    if (!text) return '기타'
+    if (text.includes('lan')) return 'LAN'
+    if (text.includes('wan')) return 'WAN'
+    if (text.includes('opt1')) return 'OPT1'
+    if (text.includes('loopback') || text.includes('lo0')) return 'LOOPBACK'
+
+    return String(raw).toUpperCase()
+  }
+
+  const buildFirewallSegments = () => {
+    if (!Array.isArray(rules) || rules.length === 0) return []
+
+    const counts = {}
+
+    rules.forEach((rule) => {
+      const iface = normalizeRuleInterface(rule)
+      const label = `${iface} 규칙`
+      counts[label] = (counts[label] || 0) + 1
+    })
+
+    return Object.entries(counts)
+      .map(([label, value]) => ({ label, value }))
+      .sort((a, b) => b.value - a.value)
+  }
+
+  const buildInterfaceSegments = () => {
+    console.log('[DashboardPage] currentInterfaceStats:', currentInterfaceStats)
+
+    if (
+      !Array.isArray(currentInterfaceStats) ||
+      currentInterfaceStats.length === 0
+    ) {
+      console.log('[DashboardPage] currentInterfaceStats 비어 있음')
+      return []
+    }
+
+    const result = currentInterfaceStats
+      .map((item) => {
+        const trafficValue =
+          item.totalBytes > 0 ? item.totalBytes : item.totalPackets || 0
+
+        return {
+          label: item.label,
+          value: trafficValue,
+          meta: {
+            rxBytes: item.rxBytes,
+            txBytes: item.txBytes,
+            rxPackets: item.rxPackets,
+            txPackets: item.txPackets,
+            rxErrors: item.rxErrors,
+            txErrors: item.txErrors,
+            collisions: item.collisions,
+            unit: item.totalBytes > 0 ? 'bytes' : 'packets',
+          },
+        }
+      })
+      .filter((item) => item.value > 0)
+      .sort((a, b) => b.value - a.value)
+
+    console.log('[DashboardPage] interfaceSegments:', result)
+    return result
+  }
+
+  const interfaceSegments = buildInterfaceSegments()
+  const firewallSegments = buildFirewallSegments()
+
+  console.log('[DashboardPage] interfaceSegments 최종:', interfaceSegments)
+  console.log('[DashboardPage] firewallSegments 최종:', firewallSegments)
+  console.log('[DashboardPage] trafficHistory:', trafficHistory)
 
   return (
-    <>
-      <div className="page-header">
-        <h2>방화벽 상태 대시보드</h2>
-        <p>OPNsense 상태와 자동 생성 규칙 현황을 한눈에 확인합니다.</p>
-      </div>
+    <div className="page">
+      <section className="dashboard-header card">
+        <div>
+          <h2>OPNsense Dashboard</h2>
+          <p>자동 갱신: {autoRefresh ? '활성화' : '비활성화'}</p>
+        </div>
+        <div>
+          <span className={`status-chip ${loading ? 'loading' : 'ready'}`}>
+            {loading ? '데이터 갱신 중' : '실시간 상태'}
+          </span>
+        </div>
+      </section>
 
-      <div className="dashboard-layout">
-        <SystemInfoCard product={product} status={status} system={system} />
-
-        <GaugeCard title="메모리" value={dashboardStats.memoryPercent} />
-        <GaugeCard
-          title="디스크"
-          value={dashboardStats.diskPercent}
-          color="orange"
+      <section className="dashboard-grid four">
+        <StatCard title="제품명" value={firmwareName} subValue="방화벽 장비" />
+        <StatCard
+          title="펌웨어 버전"
+          value={firmwareVersion}
+          subValue="현재 동작 버전"
         />
+        <StatCard
+          title="방화벽 규칙 수"
+          value={formatNumber(rules.length)}
+          subValue="로드된 규칙"
+        />
+        <StatCard
+          title="실행 서비스 수"
+          value={formatNumber(activeServiceCount)}
+          subValue={`${formatNumber(serviceRows.length)}개 중 실행`}
+        />
+      </section>
 
-        <DonutChartCard title="인터페이스 통계" items={interfaceItems} />
+      <section className="dashboard-grid three" style={{ marginTop: '16px' }}>
+        <SystemInfoCard
+          title="시스템 정보"
+          items={[
+            { label: '호스트명', value: systemSummary?.hostname || '-' },
+            { label: '플랫폼', value: systemSummary?.platform || '-' },
+            { label: 'CPU/아키텍처', value: systemSummary?.cpu_arch || '-' },
+            { label: '업데이트 상태', value: systemSummary?.updates || '-' },
+            {
+              label: '인터페이스 수',
+              value: formatNumber(interfaceRows.length),
+            },
+            { label: 'Alias 수', value: formatNumber(aliases.length) },
+          ]}
+          error={system?.error || status?.error}
+        />
 
         <DonutChartCard
-          title="방화벽"
-          items={[
-            {
-              label: 'pass',
-              value: dashboardStats.passRules,
-              color: '#2980b9',
-            },
-            {
-              label: 'block',
-              value: dashboardStats.blockRules,
-              color: '#ff7f0e',
-            },
+          title="메모리"
+          percent={mem.used_percent}
+          used={mem.used}
+          total={mem.total}
+          tooltipData={[
+            { label: '전체', value: mem.total, type: 'bytes' },
+            { label: '사용', value: mem.used, type: 'bytes' },
+            { label: '여유', value: mem.free, type: 'bytes' },
+            { label: '사용률', value: mem.used_percent, type: 'percent' },
           ]}
+          error={memory?.error}
         />
 
-        <div className="card cpu-card">
-          <div className="card-title">CPU</div>
-          <div className="cpu-name">Firewall Load</div>
-          <div className="cpu-graph">
-            <div
-              className="cpu-line"
-              style={{ width: `${dashboardStats.cpuPercent}%` }}
-            />
-          </div>
-          <strong>{dashboardStats.cpuPercent}%</strong>
-        </div>
+        <DonutChartCard
+          title="디스크"
+          percent={diskInfo.used_pct}
+          used={diskInfo.usedValue ?? 0}
+          total={diskInfo.totalValue ?? 0}
+          tooltipData={[
+            { label: '전체', value: diskInfo.blocks, type: 'text' },
+            { label: '사용', value: diskInfo.used, type: 'text' },
+            { label: '가용', value: diskInfo.available, type: 'text' },
+            { label: '사용률', value: diskInfo.used_pct, type: 'percent' },
+          ]}
+          error={disk?.error}
+        />
+      </section>
 
-        <div className="card notice-card">
-          <div className="card-title">상태 메시지</div>
-          <p>{status?.status_msg || '상태 메시지가 없습니다.'}</p>
-        </div>
+      <section className="dashboard-grid two" style={{ marginTop: '16px' }}>
+        <MultiDonutChartCard
+          title="인터페이스 통계"
+          segments={interfaceSegments}
+          emptyText="인터페이스 통계가 없습니다."
+          type="interface"
+          centerLabel={`${interfaceSegments.length}개`}
+        />
 
-        <ServiceCard autoRefresh={autoRefresh} services={serviceList} />
-        <TrafficCard traffic={traffic} />
+        <MultiDonutChartCard
+          title="방화벽"
+          segments={firewallSegments}
+          emptyText="방화벽 규칙 통계가 없습니다."
+          type="firewall"
+          centerLabel={`${firewallSegments.reduce((sum, item) => sum + item.value, 0)}개`}
+        />
+      </section>
 
-        <div className="card full-width dashboard-summary-card">
-          <div className="card-title">요약</div>
-          <div className="summary-grid">
-            <div className="summary-item">
-              <span>총 규칙 수</span>
-              <strong>{dashboardStats.totalRules}</strong>
-            </div>
+      <section style={{ marginTop: '16px' }}>
+        <TrafficAreaChartCard
+          title="트래픽 그래프"
+          history={trafficHistory}
+          error={traffic?.error}
+        />
+      </section>
 
-            <div className="summary-item">
-              <span>허용 규칙</span>
-              <strong>{dashboardStats.passRules}</strong>
-            </div>
+      <section className="dashboard-grid two" style={{ marginTop: '16px' }}>
+        <InfoTableCard
+          title="인터페이스 정보"
+          columns={[
+            { key: 'name', label: '이름' },
+            { key: 'description', label: '설명' },
+            { key: 'ip', label: 'IP' },
+            { key: 'status', label: '상태' },
+          ]}
+          rows={interfaceTableRows}
+          emptyText="인터페이스 정보가 없습니다."
+        />
 
-            <div className="summary-item">
-              <span>차단 규칙</span>
-              <strong>{dashboardStats.blockRules}</strong>
-            </div>
-
-            <div className="summary-item">
-              <span>자동 갱신</span>
-              <strong>{autoRefresh ? 'ON' : 'OFF'}</strong>
-            </div>
-
-            <div className="summary-item">
-              <span>WAN 관련</span>
-              <strong>{dashboardStats.wanRules}</strong>
-            </div>
-
-            <div className="summary-item">
-              <span>LAN 관련</span>
-              <strong>{dashboardStats.lanRules}</strong>
-            </div>
-          </div>
-        </div>
-      </div>
-    </>
+        <InfoTableCard
+          title="상태 요약"
+          columns={[
+            { key: 'name', label: '항목' },
+            { key: 'value', label: '값' },
+          ]}
+          rows={[
+            {
+              id: 'host',
+              name: '호스트명',
+              value: systemSummary?.hostname || '-',
+            },
+            {
+              id: 'platform',
+              name: '플랫폼',
+              value: systemSummary?.platform || '-',
+            },
+            {
+              id: 'cpu',
+              name: 'CPU/아키텍처',
+              value: systemSummary?.cpu_arch || '-',
+            },
+            { id: 'memSource', name: '메모리 계산 기준', value: mem.source },
+            {
+              id: 'diskRoot',
+              name: '루트 디스크',
+              value: `${diskInfo.device} (${diskInfo.mountpoint})`,
+            },
+            {
+              id: 'trafficPoints',
+              name: '트래픽 데이터 포인트',
+              value: formatNumber(trafficHistory?.length || 0),
+            },
+          ]}
+          emptyText="상태 정보가 없습니다."
+        />
+      </section>
+    </div>
   )
 }
 
