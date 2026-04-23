@@ -1,3 +1,4 @@
+
 import { useState } from 'react'
 import {
   Cell,
@@ -8,14 +9,7 @@ import {
   Tooltip,
 } from 'recharts'
 
-const COLORS = [
-  '#ff7f0e',
-  '#2ca02c',
-  '#1f77b4',
-  '#d62728',
-  '#9467bd',
-  '#8c564b',
-]
+const COLORS = ['#ff7f0e', '#2ca02c', '#1f77b4', '#d62728', '#9467bd', '#8c564b']
 
 function formatBytes(value) {
   const num = Number(value)
@@ -35,13 +29,11 @@ function formatNumber(value) {
 
 function CustomTooltip({ active, payload, type }) {
   if (!active || !payload || !payload.length) return null
-
   const item = payload[0].payload
 
   return (
     <div className="chart-tooltip">
       <div className="chart-tooltip__title">{item.label}</div>
-
       {type === 'interface' ? (
         <div className="chart-tooltip__body">
           <div>수신 바이트: {formatBytes(item.meta?.rxBytes)}</div>
@@ -51,9 +43,7 @@ function CustomTooltip({ active, payload, type }) {
           <div>수신 오류: {formatNumber(item.meta?.rxErrors)}</div>
           <div>송신 오류: {formatNumber(item.meta?.txErrors)}</div>
           <div>충돌: {formatNumber(item.meta?.collisions)}</div>
-          <div>
-            표시 기준: {item.meta?.unit === 'bytes' ? '바이트' : '패킷'}
-          </div>
+          <div>표시 기준: {item.meta?.unit === 'bytes' ? '바이트' : '패킷'}</div>
         </div>
       ) : (
         <div className="chart-tooltip__body">
@@ -66,7 +56,6 @@ function CustomTooltip({ active, payload, type }) {
 
 function renderActiveShape(props) {
   const { cx, cy, innerRadius, outerRadius, startAngle, endAngle, fill } = props
-
   return (
     <Sector
       cx={cx}
@@ -81,13 +70,7 @@ function renderActiveShape(props) {
   )
 }
 
-function MultiDonutChartCard({
-  title,
-  segments = [],
-  emptyText = '표시할 데이터가 없습니다.',
-  type = 'default',
-  centerLabel = '',
-}) {
+function MultiDonutChartCard({ title, segments = [], emptyText = '표시할 데이터가 없습니다.', type = 'default', centerLabel = '' }) {
   const [activeIndex, setActiveIndex] = useState(null)
   const data = segments.filter((item) => Number(item.value) > 0)
 
@@ -118,8 +101,7 @@ function MultiDonutChartCard({
                     onMouseLeave={() => setActiveIndex(null)}
                   >
                     {data.map((entry, index) => {
-                      const isActive =
-                        activeIndex === null || activeIndex === index
+                      const isActive = activeIndex === null || activeIndex === index
                       return (
                         <Cell
                           key={`${entry.label}-${index}`}
@@ -134,9 +116,7 @@ function MultiDonutChartCard({
                 </PieChart>
               </ResponsiveContainer>
 
-              {centerLabel ? (
-                <div className="donut-center-label">{centerLabel}</div>
-              ) : null}
+              {centerLabel ? <div className="donut-center-label">{centerLabel}</div> : null}
             </div>
           </div>
 
@@ -144,15 +124,8 @@ function MultiDonutChartCard({
             {data.map((item, index) => {
               const isActive = activeIndex === null || activeIndex === index
               return (
-                <div
-                  key={`${item.label}-${index}`}
-                  className="outside-legend__item"
-                  style={{ opacity: isActive ? 1 : 0.35 }}
-                >
-                  <span
-                    className="outside-legend__dot"
-                    style={{ backgroundColor: COLORS[index % COLORS.length] }}
-                  />
+                <div key={`${item.label}-${index}`} className="outside-legend__item" style={{ opacity: isActive ? 1 : 0.35 }}>
+                  <span className="outside-legend__dot" style={{ backgroundColor: COLORS[index % COLORS.length] }} />
                   <span className="outside-legend__label">{item.label}</span>
                 </div>
               )

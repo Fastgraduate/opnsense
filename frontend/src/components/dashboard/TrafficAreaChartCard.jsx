@@ -1,3 +1,4 @@
+
 import {
   Area,
   AreaChart,
@@ -9,14 +10,7 @@ import {
   YAxis,
 } from 'recharts'
 
-const COLORS = [
-  '#ff7f0e',
-  '#2ca02c',
-  '#1f77b4',
-  '#d62728',
-  '#9467bd',
-  '#8c564b',
-]
+const COLORS = ['#ff7f0e', '#2ca02c', '#1f77b4', '#d62728', '#9467bd', '#8c564b']
 
 function formatBytesPerSecond(value) {
   const num = Number(value)
@@ -30,19 +24,16 @@ function formatBytesPerSecond(value) {
 
 function buildInterfaceKeys(history, prefix) {
   const keys = new Set()
-
   history.forEach((row) => {
     Object.keys(row || {}).forEach((key) => {
       if (key.startsWith(prefix)) keys.add(key)
     })
   })
-
   return Array.from(keys)
 }
 
 function CustomTrafficTooltip({ active, payload, label }) {
   if (!active || !payload || !payload.length) return null
-
   return (
     <div className="chart-tooltip">
       <div className="chart-tooltip__title">{label}</div>
@@ -65,10 +56,6 @@ function TrafficAreaChartCard({ title, history = [], error = '' }) {
   const rxKeys = buildInterfaceKeys(history, 'rx_')
   const txKeys = buildInterfaceKeys(history, 'tx_')
 
-  console.log('[TrafficAreaChartCard] history:', history)
-  console.log('[TrafficAreaChartCard] rxKeys:', rxKeys)
-  console.log('[TrafficAreaChartCard] txKeys:', txKeys)
-
   return (
     <div className="card">
       <div className="card-header-row">
@@ -87,7 +74,7 @@ function TrafficAreaChartCard({ title, history = [], error = '' }) {
               <AreaChart data={history}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="time" />
-                <YAxis tickFormatter={formatBytesPerSecond} width={90} />
+                <YAxis tickFormatter={formatBytesPerSecond} width={90} domain={[0, 'dataMax + 10']} />
                 <Tooltip content={<CustomTrafficTooltip />} />
                 <Legend />
                 {rxKeys.map((key, index) => (
@@ -98,10 +85,12 @@ function TrafficAreaChartCard({ title, history = [], error = '' }) {
                     name={keyToLabel(key, 'rx_')}
                     stroke={COLORS[index % COLORS.length]}
                     fill={COLORS[index % COLORS.length]}
-                    fillOpacity={0.25}
-                    strokeWidth={2}
+                    fillOpacity={0.35}
+                    strokeWidth={3}
                     connectNulls
                     isAnimationActive={false}
+                    dot={false}
+                    activeDot={{ r: 5 }}
                   />
                 ))}
               </AreaChart>
@@ -114,7 +103,7 @@ function TrafficAreaChartCard({ title, history = [], error = '' }) {
               <AreaChart data={history}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="time" />
-                <YAxis tickFormatter={formatBytesPerSecond} width={90} />
+                <YAxis tickFormatter={formatBytesPerSecond} width={90} domain={[0, 'dataMax + 10']} />
                 <Tooltip content={<CustomTrafficTooltip />} />
                 <Legend />
                 {txKeys.map((key, index) => (
@@ -125,10 +114,12 @@ function TrafficAreaChartCard({ title, history = [], error = '' }) {
                     name={keyToLabel(key, 'tx_')}
                     stroke={COLORS[index % COLORS.length]}
                     fill={COLORS[index % COLORS.length]}
-                    fillOpacity={0.25}
-                    strokeWidth={2}
+                    fillOpacity={0.35}
+                    strokeWidth={3}
                     connectNulls
                     isAnimationActive={false}
+                    dot={false}
+                    activeDot={{ r: 5 }}
                   />
                 ))}
               </AreaChart>

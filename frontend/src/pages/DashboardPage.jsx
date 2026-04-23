@@ -1,3 +1,4 @@
+
 import DonutChartCard from '../components/dashboard/DonutChartCard'
 import InfoTableCard from '../components/dashboard/InfoTableCard'
 import MultiDonutChartCard from '../components/dashboard/MultiDonutChartCard'
@@ -23,11 +24,11 @@ function DashboardPage({
   loading,
   trafficHistory,
   currentInterfaceStats,
+  selectedFirewall,
 }) {
   const toNumber = (value) => {
     if (value === null || value === undefined) return 0
     if (typeof value === 'number') return Number.isFinite(value) ? value : 0
-
     const cleaned = String(value).replace(/[^\d.-]/g, '')
     const num = Number(cleaned)
     return Number.isFinite(num) ? num : 0
@@ -37,60 +38,32 @@ function DashboardPage({
 
   const pickDisplayValue = (value) => {
     if (value === null || value === undefined) return '-'
-
-    if (
-      typeof value === 'string' ||
-      typeof value === 'number' ||
-      typeof value === 'boolean'
-    ) {
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
       return String(value)
     }
-
-    if (Array.isArray(value)) {
-      return value.map((item) => pickDisplayValue(item)).join(', ')
-    }
-
+    if (Array.isArray(value)) return value.map((item) => pickDisplayValue(item)).join(', ')
     if (typeof value === 'object') {
       if (value.ipaddr !== undefined) return pickDisplayValue(value.ipaddr)
       if (value.address !== undefined) return pickDisplayValue(value.address)
       if (value.value !== undefined) return pickDisplayValue(value.value)
-      if (value.text !== undefined) return pickDisplayValue(value.text)
-
       const firstPrimitive = Object.values(value).find(
-        (v) =>
-          typeof v === 'string' ||
-          typeof v === 'number' ||
-          typeof v === 'boolean',
+        (v) => typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean',
       )
-
       if (firstPrimitive !== undefined) return String(firstPrimitive)
       return JSON.stringify(value)
     }
-
     return String(value)
   }
 
   const parseSizeStringToBytes = (value) => {
     if (!value) return 0
     if (typeof value === 'number') return value
-
     const text = String(value).trim().toUpperCase()
     const match = text.match(/^([\d.]+)\s*([KMGTP]?)(I?B)?$/)
-
     if (!match) return 0
-
     const amount = Number(match[1])
     const unit = match[2]
-
-    const unitMap = {
-      '': 1,
-      K: 1024,
-      M: 1024 ** 2,
-      G: 1024 ** 3,
-      T: 1024 ** 4,
-      P: 1024 ** 5,
-    }
-
+    const unitMap = { '': 1, K: 1024, M: 1024 ** 2, G: 1024 ** 3, T: 1024 ** 4, P: 1024 ** 5 }
     return amount * (unitMap[unit] || 1)
   }
 
@@ -107,14 +80,12 @@ function DashboardPage({
     if (Array.isArray(interfaces)) return interfaces
     if (Array.isArray(interfaces?.rows)) return interfaces.rows
     if (Array.isArray(interfaces?.data)) return interfaces.data
-
     if (typeof interfaces === 'object') {
       return Object.entries(interfaces).map(([name, value]) => ({
         name,
         ...(typeof value === 'object' ? value : { value }),
       }))
     }
-
     return []
   }
 
@@ -122,9 +93,7 @@ function DashboardPage({
   const interfaceRows = normalizeInterfaces()
 
   const activeServiceCount = serviceRows.filter((svc) => {
-    const running = String(
-      svc?.running ?? svc?.status ?? svc?.state ?? '',
-    ).toLowerCase()
+    const running = String(svc?.running ?? svc?.status ?? svc?.state ?? '').toLowerCase()
     return ['1', 'true', 'running', 'up', 'active'].includes(running)
   }).length
 
@@ -143,18 +112,10 @@ function DashboardPage({
 
   const interfaceTableRows = interfaceRows.map((row, idx) => ({
     id: `${idx}-${pickDisplayValue(row?.identifier || row?.name || row?.if || `interface-${idx + 1}`)}`,
-    name: pickDisplayValue(
-      row?.identifier || row?.name || row?.if || `interface-${idx + 1}`,
-    ),
-    description: pickDisplayValue(
-      row?.description || row?.descr || row?.friendly_name || '-',
-    ),
-    ip: pickDisplayValue(
-      row?.ipaddr || row?.ip || row?.address || row?.ipv4 || '-',
-    ),
-    status: pickDisplayValue(
-      row?.status || row?.link_state || row?.state || '-',
-    ),
+    name: pickDisplayValue(row?.identifier || row?.name || row?.if || `interface-${idx + 1}`),
+    description: pickDisplayValue(row?.description || row?.descr || row?.friendly_name || '-'),
+    ip: pickDisplayValue(row?.ipaddr || row?.ip || row?.address || row?.ipv4 || '-'),
+    status: pickDisplayValue(row?.status || row?.link_state || row?.state || '-'),
   }))
 
   const mem = {
@@ -178,57 +139,34 @@ function DashboardPage({
   }
 
   const normalizeRuleInterface = (rule) => {
-    const raw =
-      rule?.interface ||
-      rule?.if ||
-      rule?.interfaces ||
-      rule?.descr ||
-      rule?.description ||
-      ''
-
+    const raw = rule?.interface || rule?.if || rule?.interfaces || ''
     const text = String(raw).trim().toLowerCase()
-
     if (!text) return '기타'
     if (text.includes('lan')) return 'LAN'
     if (text.includes('wan')) return 'WAN'
     if (text.includes('opt1')) return 'OPT1'
     if (text.includes('loopback') || text.includes('lo0')) return 'LOOPBACK'
-
     return String(raw).toUpperCase()
   }
 
   const buildFirewallSegments = () => {
     if (!Array.isArray(rules) || rules.length === 0) return []
-
     const counts = {}
-
     rules.forEach((rule) => {
       const iface = normalizeRuleInterface(rule)
       const label = `${iface} 규칙`
       counts[label] = (counts[label] || 0) + 1
     })
-
     return Object.entries(counts)
       .map(([label, value]) => ({ label, value }))
       .sort((a, b) => b.value - a.value)
   }
 
   const buildInterfaceSegments = () => {
-    console.log('[DashboardPage] currentInterfaceStats:', currentInterfaceStats)
-
-    if (
-      !Array.isArray(currentInterfaceStats) ||
-      currentInterfaceStats.length === 0
-    ) {
-      console.log('[DashboardPage] currentInterfaceStats 비어 있음')
-      return []
-    }
-
-    const result = currentInterfaceStats
+    if (!Array.isArray(currentInterfaceStats) || currentInterfaceStats.length === 0) return []
+    return currentInterfaceStats
       .map((item) => {
-        const trafficValue =
-          item.totalBytes > 0 ? item.totalBytes : item.totalPackets || 0
-
+        const trafficValue = item.totalBytes > 0 ? item.totalBytes : item.totalPackets || 0
         return {
           label: item.label,
           value: trafficValue,
@@ -246,17 +184,10 @@ function DashboardPage({
       })
       .filter((item) => item.value > 0)
       .sort((a, b) => b.value - a.value)
-
-    console.log('[DashboardPage] interfaceSegments:', result)
-    return result
   }
 
   const interfaceSegments = buildInterfaceSegments()
   const firewallSegments = buildFirewallSegments()
-
-  console.log('[DashboardPage] interfaceSegments 최종:', interfaceSegments)
-  console.log('[DashboardPage] firewallSegments 최종:', firewallSegments)
-  console.log('[DashboardPage] trafficHistory:', trafficHistory)
 
   return (
     <div className="page">
@@ -264,6 +195,7 @@ function DashboardPage({
         <div>
           <h2>OPNsense Dashboard</h2>
           <p>자동 갱신: {autoRefresh ? '활성화' : '비활성화'}</p>
+          <p className="subtle-text">대상 방화벽: {selectedFirewall?.name || '-'}</p>
         </div>
         <div>
           <span className={`status-chip ${loading ? 'loading' : 'ready'}`}>
@@ -274,16 +206,8 @@ function DashboardPage({
 
       <section className="dashboard-grid four">
         <StatCard title="제품명" value={firmwareName} subValue="방화벽 장비" />
-        <StatCard
-          title="펌웨어 버전"
-          value={firmwareVersion}
-          subValue="현재 동작 버전"
-        />
-        <StatCard
-          title="방화벽 규칙 수"
-          value={formatNumber(rules.length)}
-          subValue="로드된 규칙"
-        />
+        <StatCard title="펌웨어 버전" value={firmwareVersion} subValue="현재 동작 버전" />
+        <StatCard title="방화벽 규칙 수" value={formatNumber(rules.length)} subValue="로드된 규칙" />
         <StatCard
           title="실행 서비스 수"
           value={formatNumber(activeServiceCount)}
@@ -299,10 +223,7 @@ function DashboardPage({
             { label: '플랫폼', value: systemSummary?.platform || '-' },
             { label: 'CPU/아키텍처', value: systemSummary?.cpu_arch || '-' },
             { label: '업데이트 상태', value: systemSummary?.updates || '-' },
-            {
-              label: '인터페이스 수',
-              value: formatNumber(interfaceRows.length),
-            },
+            { label: '인터페이스 수', value: formatNumber(interfaceRows.length) },
             { label: 'Alias 수', value: formatNumber(aliases.length) },
           ]}
           error={system?.error || status?.error}
@@ -356,11 +277,7 @@ function DashboardPage({
       </section>
 
       <section style={{ marginTop: '16px' }}>
-        <TrafficAreaChartCard
-          title="트래픽 그래프"
-          history={trafficHistory}
-          error={traffic?.error}
-        />
+        <TrafficAreaChartCard title="트래픽 그래프" history={trafficHistory} error={traffic?.error} />
       </section>
 
       <section className="dashboard-grid two" style={{ marginTop: '16px' }}>
@@ -383,32 +300,12 @@ function DashboardPage({
             { key: 'value', label: '값' },
           ]}
           rows={[
-            {
-              id: 'host',
-              name: '호스트명',
-              value: systemSummary?.hostname || '-',
-            },
-            {
-              id: 'platform',
-              name: '플랫폼',
-              value: systemSummary?.platform || '-',
-            },
-            {
-              id: 'cpu',
-              name: 'CPU/아키텍처',
-              value: systemSummary?.cpu_arch || '-',
-            },
+            { id: 'host', name: '호스트명', value: systemSummary?.hostname || '-' },
+            { id: 'platform', name: '플랫폼', value: systemSummary?.platform || '-' },
+            { id: 'cpu', name: 'CPU/아키텍처', value: systemSummary?.cpu_arch || '-' },
             { id: 'memSource', name: '메모리 계산 기준', value: mem.source },
-            {
-              id: 'diskRoot',
-              name: '루트 디스크',
-              value: `${diskInfo.device} (${diskInfo.mountpoint})`,
-            },
-            {
-              id: 'trafficPoints',
-              name: '트래픽 데이터 포인트',
-              value: formatNumber(trafficHistory?.length || 0),
-            },
+            { id: 'diskRoot', name: '루트 디스크', value: `${diskInfo.device} (${diskInfo.mountpoint})` },
+            { id: 'trafficPoints', name: '트래픽 데이터 포인트', value: formatNumber(trafficHistory?.length || 0) },
           ]}
           emptyText="상태 정보가 없습니다."
         />

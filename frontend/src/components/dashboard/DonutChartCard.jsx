@@ -1,3 +1,4 @@
+
 import { useState } from 'react'
 import {
   Cell,
@@ -28,13 +29,9 @@ function getTooltipRows(tooltipData = [], activeName) {
   if (activeName === 'used') {
     return tooltipData.filter((item) => item.label === '사용')
   }
-
   if (activeName === 'free') {
-    return tooltipData.filter(
-      (item) => item.label === '여유' || item.label === '가용',
-    )
+    return tooltipData.filter((item) => item.label === '여유' || item.label === '가용')
   }
-
   return []
 }
 
@@ -46,11 +43,9 @@ function getTooltipTitle(activeName) {
 
 function CustomTooltip({ active, payload, tooltipData = [] }) {
   if (!active || !payload || !payload.length) return null
-
   const activeName = payload[0]?.name
   const rows = getTooltipRows(tooltipData, activeName)
   const title = getTooltipTitle(activeName)
-
   if (!rows.length) return null
 
   return (
@@ -69,7 +64,6 @@ function CustomTooltip({ active, payload, tooltipData = [] }) {
 
 function renderActiveSemiShape(props) {
   const { cx, cy, innerRadius, outerRadius, startAngle, endAngle, fill } = props
-
   return (
     <Sector
       cx={cx}
@@ -84,23 +78,13 @@ function renderActiveSemiShape(props) {
   )
 }
 
-function DonutChartCard({
-  title,
-  percent = 0,
-  used = 0,
-  total = 0,
-  tooltipData = [],
-  error = '',
-}) {
+function DonutChartCard({ title, percent = 0, used = 0, total = 0, tooltipData = [], error = '' }) {
   const [activeIndex, setActiveIndex] = useState(null)
-
   const safePercent = Math.max(0, Math.min(100, Number(percent) || 0))
-
   const chartData = [
     { name: 'used', value: safePercent, color: '#ef6c00' },
     { name: 'free', value: Math.max(100 - safePercent, 0), color: '#e0e0e0' },
   ]
-
   const usageText = `${formatBytes(used)} / ${formatBytes(total)}`
 
   return (
@@ -132,7 +116,6 @@ function DonutChartCard({
               >
                 {chartData.map((entry, index) => {
                   const isActive = activeIndex === null || activeIndex === index
-
                   return (
                     <Cell
                       key={`${entry.name}-${index}`}

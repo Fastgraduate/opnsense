@@ -1,28 +1,24 @@
+
 function Sidebar({ currentPage, setCurrentPage }) {
+  const menus = [
+    { id: 'dashboard', label: '대시보드' },
+    { id: 'rules', label: '룰 관리' },
+    { id: 'logs', label: '로그' },
+    { id: 'firewalls', label: '방화벽 관리' },
+  ]
+
   return (
     <aside className="sidebar">
-      <div className="sidebar-title">OPNsense Admin</div>
-
-      <button
-        className={`sidebar-menu ${currentPage === 'dashboard' ? 'active' : ''}`}
-        onClick={() => setCurrentPage('dashboard')}
-      >
-        📊 대시보드
-      </button>
-
-      <button
-        className={`sidebar-menu ${currentPage === 'rules' ? 'active' : ''}`}
-        onClick={() => setCurrentPage('rules')}
-      >
-        🔥 룰 확인 / 추가
-      </button>
-
-      <button
-        className={`sidebar-menu ${currentPage === 'logs' ? 'active' : ''}`}
-        onClick={() => setCurrentPage('logs')}
-      >
-        📜 로그 확인
-      </button>
+      <div className="sidebar-title">OPNsense Manager</div>
+      {menus.map((menu) => (
+        <button
+          key={menu.id}
+          className={`sidebar-menu ${currentPage === menu.id ? 'active' : ''}`}
+          onClick={() => setCurrentPage(menu.id)}
+        >
+          {menu.label}
+        </button>
+      ))}
     </aside>
   )
 }

@@ -1,22 +1,27 @@
-import LogList from '../components/logs/LogList'
 
-function LogsPage({ logs, setLogs }) {
+function LogsPage({ logs = [], setLogs }) {
   return (
-    <>
-      <div className="page-header">
-        <h2>로그 확인</h2>
-        <p>대시보드 동작과 룰 변경 내역을 간단히 확인합니다.</p>
+    <div className="card">
+      <div className="section-header">
+        <h3>작업 로그</h3>
+        <button onClick={() => setLogs([])}>로그 비우기</button>
       </div>
-
-      <div className="card">
-        <div className="section-header">
-          <h3>📜 이벤트 로그</h3>
-          <button onClick={() => setLogs([])}>로그 비우기</button>
-        </div>
-
-        <LogList logs={logs} />
+      <div className="log-list">
+        {logs.length === 0 ? (
+          <p className="empty-text">로그가 없습니다.</p>
+        ) : (
+          logs.map((log) => (
+            <div className="log-item" key={log.id}>
+              <div className={`log-badge ${String(log.level).toLowerCase()}`}>{log.level}</div>
+              <div className="log-content">
+                <div className="log-message">{log.message}</div>
+                <div className="log-time">{log.time}</div>
+              </div>
+            </div>
+          ))
+        )}
       </div>
-    </>
+    </div>
   )
 }
 
