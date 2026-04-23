@@ -1,22 +1,22 @@
-
 function Sidebar({ currentPage, setCurrentPage }) {
-  const menus = [
-    { id: 'dashboard', label: '대시보드' },
-    { id: 'rules', label: '룰 관리' },
-    { id: 'logs', label: '로그' },
-    { id: 'firewalls', label: '방화벽 관리' },
+  const items = [
+    ['dashboard', '대시보드'],
+    ['rules', '룰 관리'],
+    ['eventLogs', '방화벽 이벤트 로그'],
+    ['firewalls', '방화벽 관리'],
+    ['logs', '앱 로그'],
   ]
 
   return (
     <aside className="sidebar">
       <div className="sidebar-title">OPNsense Manager</div>
-      {menus.map((menu) => (
+      {items.map(([key, label]) => (
         <button
-          key={menu.id}
-          className={`sidebar-menu ${currentPage === menu.id ? 'active' : ''}`}
-          onClick={() => setCurrentPage(menu.id)}
+          key={key}
+          className={`sidebar-menu ${currentPage === key ? 'active' : ''}`}
+          onClick={() => setCurrentPage(key)}
         >
-          {menu.label}
+          {label}
         </button>
       ))}
     </aside>

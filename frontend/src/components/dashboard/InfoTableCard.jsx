@@ -1,32 +1,27 @@
-
 function InfoTableCard({ title, columns = [], rows = [], emptyText = '데이터가 없습니다.' }) {
   return (
     <div className="card">
-      <div className="card-header-row">
-        <h3>{title}</h3>
-      </div>
-      <div className="table-wrap">
-        <table className="dashboard-table">
-          <thead>
-            <tr>
-              {columns.map((col) => <th key={col.key}>{col.label}</th>)}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.length === 0 ? (
+      <div className="card-header-row"><h3>{title}</h3></div>
+      {rows.length === 0 ? (
+        <p>{emptyText}</p>
+      ) : (
+        <div className="table-wrap">
+          <table className="dashboard-table">
+            <thead>
               <tr>
-                <td colSpan={columns.length}>{emptyText}</td>
+                {columns.map((col) => <th key={col.key}>{col.label}</th>)}
               </tr>
-            ) : (
-              rows.map((row) => (
+            </thead>
+            <tbody>
+              {rows.map((row) => (
                 <tr key={row.id}>
-                  {columns.map((col) => <td key={col.key}>{row[col.key]}</td>)}
+                  {columns.map((col) => <td key={col.key}>{row[col.key] ?? '-'}</td>)}
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   )
 }

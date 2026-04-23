@@ -1,13 +1,5 @@
-
 import { useState } from 'react'
-import {
-  Cell,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Sector,
-  Tooltip,
-} from 'recharts'
+import { Cell, Pie, PieChart, ResponsiveContainer, Sector, Tooltip } from 'recharts'
 
 function formatBytes(value) {
   const num = Number(value)
@@ -19,63 +11,18 @@ function formatBytes(value) {
   return `${(num / 1024 ** 4).toFixed(2)} TB`
 }
 
-function formatValue(value, type) {
-  if (type === 'bytes') return formatBytes(value)
-  if (type === 'percent') return `${Number(value || 0).toFixed(1)}%`
-  return String(value)
-}
-
-function getTooltipRows(tooltipData = [], activeName) {
-  if (activeName === 'used') {
-    return tooltipData.filter((item) => item.label === '사용')
-  }
-  if (activeName === 'free') {
-    return tooltipData.filter((item) => item.label === '여유' || item.label === '가용')
-  }
-  return []
-}
-
-function getTooltipTitle(activeName) {
-  if (activeName === 'used') return '사용'
-  if (activeName === 'free') return '여유'
-  return ''
+function renderActiveSemiShape(props) {
+  const { cx, cy, innerRadius, outerRadius, startAngle, endAngle, fill } = props
+  return <Sector cx={cx} cy={cy} innerRadius={innerRadius} outerRadius={outerRadius + 8} startAngle={startAngle} endAngle={endAngle} fill={fill} stroke="none" />
 }
 
 function CustomTooltip({ active, payload, tooltipData = [] }) {
   if (!active || !payload || !payload.length) return null
-  const activeName = payload[0]?.name
-  const rows = getTooltipRows(tooltipData, activeName)
-  const title = getTooltipTitle(activeName)
-  if (!rows.length) return null
-
-  return (
-    <div className="chart-tooltip">
-      <div className="chart-tooltip__title">{title}</div>
-      <div className="chart-tooltip__body">
-        {rows.map((item, index) => (
-          <div key={`${item.label}-${index}`}>
-            {item.label}: {formatValue(item.value, item.type)}
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function renderActiveSemiShape(props) {
-  const { cx, cy, innerRadius, outerRadius, startAngle, endAngle, fill } = props
-  return (
-    <Sector
-      cx={cx}
-      cy={cy}
-      innerRadius={innerRadius}
-      outerRadius={outerRadius + 8}
-      startAngle={startAngle}
-      endAngle={endAngle}
-      fill={fill}
-      stroke="none"
-    />
-  )
+  const name = payload[0]?.name
+  const row = name === 'used' ? tooltipData.find((x) => x.label === '사용') : tooltipData.find((x) => x.label === '여유' || x.label === '가용')
+  if (!row) return null
+  const value = row.type === 'bytes' ? formatBytes(row.value) : row.type === 'percent' ? `${Number(row.value || 0).toFixed(1)}%` : String(row.value)
+  return <div className="chart-tooltip"><div className="chart-tooltip__title">{row.label}</div><div className="chart-tooltip__body"><div>{row.label}: {value}</div></div></div>
 }
 
 function DonutChartCard({ title, percent = 0, used = 0, total = 0, tooltipData = [], error = '' }) {
@@ -85,17 +32,11 @@ function DonutChartCard({ title, percent = 0, used = 0, total = 0, tooltipData =
     { name: 'used', value: safePercent, color: '#ef6c00' },
     { name: 'free', value: Math.max(100 - safePercent, 0), color: '#e0e0e0' },
   ]
-  const usageText = `${formatBytes(used)} / ${formatBytes(total)}`
 
   return (
     <div className="card donut-card">
-      <div className="card-header-row">
-        <h3>{title}</h3>
-      </div>
-
-      {error ? (
-        <p className="error-text">{error}</p>
-      ) : (
+      <div className="card-header-row"><h3>{title}</h3></div>
+      {error ? <p className="error-text">{String(error)}</p> : (
         <div className="semi-donut-wrap">
           <ResponsiveContainer width="100%" height={230}>
             <PieChart>
@@ -116,23 +57,15 @@ function DonutChartCard({ title, percent = 0, used = 0, total = 0, tooltipData =
               >
                 {chartData.map((entry, index) => {
                   const isActive = activeIndex === null || activeIndex === index
-                  return (
-                    <Cell
-                      key={`${entry.name}-${index}`}
-                      fill={entry.color}
-                      fillOpacity={isActive ? 1 : 0.22}
-                      stroke="none"
-                    />
-                  )
+                  return <Cell key={entry.name} fill={entry.color} fillOpacity={isActive ? 1 : 0.22} stroke="none" />
                 })}
               </Pie>
               <Tooltip content={<CustomTooltip tooltipData={tooltipData} />} />
             </PieChart>
           </ResponsiveContainer>
-
           <div className="semi-donut-center">
             <div className="semi-donut-percent">{safePercent.toFixed(1)}%</div>
-            <div className="semi-donut-usage">{usageText}</div>
+            <div className="semi-donut-usage">{formatBytes(used)} / {formatBytes(total)}</div>
           </div>
         </div>
       )}

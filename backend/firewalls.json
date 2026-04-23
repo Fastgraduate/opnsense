@@ -1,0 +1,14 @@
+[
+  {
+    "id": 1,
+    "name": "test",
+    "host": "https://192.168.44.141",
+    "api_key_enc": "gAAAAABp6YpIiMaMxrZ99a7uz_qALXftPDIyNtU7AxTMKKN_JoXQZ1UTgyX2riiNdA7wI1XJkTyp8qAZwpferspqABzlXn0i3BeljHqNjjSlD3PfhO4lMUEv4N2bUjrUA-9D_HBSADf7B2O5KF2l5-3Y8zKkPJp7FIWitv6dtnC8o3C4NA4gTdEdiRSNhS7QAhsLXR8S1rjK",
+    "api_secret_enc": "gAAAAABp6YpIbZrODi74xaBCqY5x4el4gULU2JhOy2BN3gErXcD2Id0I8Q-6e6dFDCq13HFbRo67RRJq2YK83RV5pSUxMLkw_XGVIzn63WSNFc8wHZ5cvBHeCucamnezkCk04AeT68WU0Ry82fu2A1Qu4xOPu3oZmRxHp7Fx_DiqCGF0xgyqmz-ryEUYCLfDlpkU2cFNopOM",
+    "verify_ssl": false,
+    "log_index": "logs-suricata.eve-*",
+    "description": "",
+    "created_at": 1776912968,
+    "updated_at": 1776912968
+  }
+]

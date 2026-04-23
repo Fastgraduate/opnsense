@@ -1,257 +1,215 @@
-
 import json
 import os
 import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
-from urllib.parse import quote, urlparse
+from urllib.parse import quote
 
 import requests
 import urllib3
-from cryptography.fernet import Fernet, InvalidToken
+from cryptography.fernet import Fernet
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data"
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-load_dotenv(BASE_DIR / ".env")
+load_dotenv(BASE_DIR / '.env')
 
 
 def parse_bool(value: Optional[str], default: bool = False) -> bool:
     if value is None:
         return default
-    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return value.strip().lower() in {'1', 'true', 'yes', 'y', 'on'}
 
 
-APP_ENCRYPTION_KEY = os.getenv("APP_ENCRYPTION_KEY", "").strip()
-PORT = int(os.getenv("PORT", "8000"))
-DEFAULT_TIMEOUT = int(os.getenv("OPNSENSE_TIMEOUT", "20"))
-DEFAULT_VERIFY_SSL = parse_bool(os.getenv("OPNSENSE_VERIFY_SSL"), default=False)
+APP_ENCRYPTION_KEY = os.getenv('APP_ENCRYPTION_KEY', '').strip()
+OPNSENSE_TIMEOUT = int(os.getenv('OPNSENSE_TIMEOUT', '20'))
+ELASTIC_URL = os.getenv('ELASTIC_URL', '').strip().rstrip('/')
+ELASTIC_API_KEY = os.getenv('ELASTIC_API_KEY', '').strip()
+ELASTIC_USERNAME = os.getenv('ELASTIC_USERNAME', '').strip()
+ELASTIC_PASSWORD = os.getenv('ELASTIC_PASSWORD', '').strip()
+ELASTIC_VERIFY_SSL = parse_bool(os.getenv('ELASTIC_VERIFY_SSL'), default=False)
 
-if not APP_ENCRYPTION_KEY:
-    raise RuntimeError("APP_ENCRYPTION_KEY 환경변수가 필요합니다.")
+if not ELASTIC_VERIFY_SSL:
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-fernet = Fernet(APP_ENCRYPTION_KEY.encode() if not APP_ENCRYPTION_KEY.startswith("gAAAA") and len(APP_ENCRYPTION_KEY) != 44 else APP_ENCRYPTION_KEY.encode())
-STORE_PATH = DATA_DIR / "firewalls.json.enc"
+FIREWALLS_FILE = BASE_DIR / 'firewalls.json'
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-app = FastAPI(title="OPNsense Multi-Firewall Backend")
+app = FastAPI(title='Multi Firewall Dashboard Backend')
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:5173', 'http://127.0.0.1:5173'],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=['*'],
+    allow_headers=['*'],
 )
 
 
-class AliasAddressBody(BaseModel):
-    address: str
-
-
-class RuleCreateBody(BaseModel):
-    description: str = ""
-    action: str = "pass"
-    interface: str = "lan"
-    direction: str = "in"
-    protocol: str = "TCP"
-    sourceNet: str = "any"
-    sourcePort: str = ""
-    destinationNet: str = "any"
-    destinationPort: str = ""
-    enabled: str = "1"
-    quick: str = "1"
-    log: bool = False
-
-
 class FirewallCreateBody(BaseModel):
-    name: str = Field(min_length=1, max_length=100)
-    host: str = Field(min_length=1, max_length=200)
-    apiKey: str = Field(min_length=1, max_length=300)
-    apiSecret: str = Field(min_length=1, max_length=300)
-    verifySsl: bool = False
-    timeout: int = Field(default=DEFAULT_TIMEOUT, ge=3, le=60)
-
-    @field_validator("host")
-    @classmethod
-    def validate_host(cls, value: str) -> str:
-        host = value.strip().rstrip("/")
-        parsed = urlparse(host)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise ValueError("host는 http(s)://host 형태여야 합니다.")
-        return host
+    name: str = Field(min_length=1)
+    host: str = Field(min_length=1)
+    api_key: str = Field(min_length=1)
+    api_secret: str = Field(min_length=1)
+    verify_ssl: bool = False
+    log_index: str = 'logs-suricata.eve-*'
+    description: str = ''
 
 
 class FirewallUpdateBody(BaseModel):
-    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
-    host: Optional[str] = Field(default=None, min_length=1, max_length=200)
-    apiKey: Optional[str] = Field(default=None, min_length=1, max_length=300)
-    apiSecret: Optional[str] = Field(default=None, min_length=1, max_length=300)
-    verifySsl: Optional[bool] = None
-    timeout: Optional[int] = Field(default=None, ge=3, le=60)
-
-    @field_validator("host")
-    @classmethod
-    def validate_host(cls, value: Optional[str]) -> Optional[str]:
-        if value is None:
-            return value
-        host = value.strip().rstrip("/")
-        parsed = urlparse(host)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise ValueError("host는 http(s)://host 형태여야 합니다.")
-        return host
+    name: Optional[str] = None
+    host: Optional[str] = None
+    api_key: Optional[str] = None
+    api_secret: Optional[str] = None
+    verify_ssl: Optional[bool] = None
+    log_index: Optional[str] = None
+    description: Optional[str] = None
 
 
-def encrypt_json(data: Any) -> bytes:
-    raw = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
-    return fernet.encrypt(raw)
+class RuleCreateBody(BaseModel):
+    description: str = ''
+    action: str = 'pass'
+    interface: str = 'lan'
+    direction: str = 'in'
+    protocol: str = 'TCP'
+    sourceNet: str = 'any'
+    sourcePort: str = ''
+    destinationNet: str = 'any'
+    destinationPort: str = ''
+    enabled: str = '1'
+    quick: str = '1'
+    log: bool = False
 
 
-def decrypt_json(blob: bytes) -> Any:
+class EventLogsQueryBody(BaseModel):
+    size: int = 50
+    minutes: int = 60
+    action: str = ''
+    interface: str = ''
+    query: str = ''
+
+
+# ---------- security / storage ----------
+
+def ensure_encryption_key() -> Fernet:
+    if not APP_ENCRYPTION_KEY:
+        raise HTTPException(status_code=500, detail='APP_ENCRYPTION_KEY 누락')
     try:
-        raw = fernet.decrypt(blob)
-        return json.loads(raw.decode("utf-8"))
-    except InvalidToken as e:
-        raise RuntimeError("firewalls 저장소 복호화 실패: APP_ENCRYPTION_KEY 확인 필요") from e
+        return Fernet(APP_ENCRYPTION_KEY.encode())
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f'APP_ENCRYPTION_KEY 오류: {exc}')
 
 
-def load_store() -> Dict[str, Any]:
-    if not STORE_PATH.exists():
-        data = {"selected_firewall_id": None, "firewalls": []}
-        save_store(data)
-        return data
-
-    data = decrypt_json(STORE_PATH.read_bytes())
-    if not isinstance(data, dict):
-        data = {"selected_firewall_id": None, "firewalls": []}
-    data.setdefault("selected_firewall_id", None)
-    data.setdefault("firewalls", [])
-    return data
+def encrypt_text(text: str) -> str:
+    return ensure_encryption_key().encrypt(text.encode()).decode()
 
 
-def save_store(data: Dict[str, Any]) -> None:
-    STORE_PATH.write_bytes(encrypt_json(data))
+def decrypt_text(token: str) -> str:
+    return ensure_encryption_key().decrypt(token.encode()).decode()
 
 
-def mask_secret(text: str, keep: int = 4) -> str:
-    if not text:
-        return ""
-    if len(text) <= keep:
-        return "*" * len(text)
-    return "*" * (len(text) - keep) + text[-keep:]
+def load_firewalls() -> List[Dict[str, Any]]:
+    if not FIREWALLS_FILE.exists():
+        return []
+    try:
+        return json.loads(FIREWALLS_FILE.read_text(encoding='utf-8'))
+    except Exception:
+        return []
 
 
-def public_firewall(fw: Dict[str, Any]) -> Dict[str, Any]:
+def save_firewalls(items: List[Dict[str, Any]]) -> None:
+    FIREWALLS_FILE.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding='utf-8')
+
+
+def next_firewall_id(items: List[Dict[str, Any]]) -> int:
+    return max([int(x.get('id', 0)) for x in items] + [0]) + 1
+
+
+def serialize_firewall(item: Dict[str, Any]) -> Dict[str, Any]:
     return {
-        "id": fw["id"],
-        "name": fw["name"],
-        "host": fw["host"],
-        "verifySsl": fw.get("verifySsl", False),
-        "timeout": fw.get("timeout", DEFAULT_TIMEOUT),
-        "apiKeyMasked": mask_secret(fw.get("apiKey", "")),
-        "apiSecretMasked": mask_secret(fw.get("apiSecret", "")),
-        "createdAt": fw.get("createdAt"),
-        "updatedAt": fw.get("updatedAt"),
+        'id': item['id'],
+        'name': item['name'],
+        'host': item['host'],
+        'verify_ssl': item.get('verify_ssl', False),
+        'log_index': item.get('log_index', 'logs-suricata.eve-*'),
+        'description': item.get('description', ''),
+        'has_secret': bool(item.get('api_key_enc') and item.get('api_secret_enc')),
+        'created_at': item.get('created_at', 0),
+        'updated_at': item.get('updated_at', 0),
     }
 
 
 def get_firewall_or_404(firewall_id: int) -> Dict[str, Any]:
-    store = load_store()
-    for fw in store["firewalls"]:
-        if fw["id"] == firewall_id:
-            return fw
-    raise HTTPException(status_code=404, detail="방화벽을 찾을 수 없습니다.")
+    for item in load_firewalls():
+        if int(item.get('id', 0)) == firewall_id:
+            return item
+    raise HTTPException(status_code=404, detail='방화벽을 찾을 수 없습니다.')
 
 
-def get_selected_firewall_or_404() -> Dict[str, Any]:
-    store = load_store()
-    selected_id = store.get("selected_firewall_id")
-    if not selected_id:
-        raise HTTPException(status_code=400, detail="선택된 방화벽이 없습니다.")
-    for fw in store["firewalls"]:
-        if fw["id"] == selected_id:
-            return fw
-    raise HTTPException(status_code=404, detail="선택된 방화벽을 찾을 수 없습니다.")
+# ---------- shared helpers ----------
+def opnsense_request(target: Dict[str, Any], method: str, path: str, json_data: Optional[Dict[str, Any]] = None) -> Any:
+    host = str(target.get('host', '')).strip().rstrip('/')
+    if not host:
+        raise HTTPException(status_code=500, detail='방화벽 host 누락')
 
-
-def opnsense_request_for_target(
-    target: Dict[str, Any],
-    method: str,
-    path: str,
-    json_data: Optional[Dict[str, Any]] = None,
-) -> Any:
-    url = f"{target['host']}{path}"
+    url = f'{host}{path}'
     headers: Dict[str, str] = {}
     if json_data is not None:
-        headers["Content-Type"] = "application/json"
+        headers['Content-Type'] = 'application/json'
+
+    api_key = decrypt_text(target['api_key_enc'])
+    api_secret = decrypt_text(target['api_secret_enc'])
 
     try:
         response = requests.request(
             method=method.upper(),
             url=url,
-            auth=(target["apiKey"], target["apiSecret"]),
+            auth=(api_key, api_secret),
             json=json_data,
-            verify=bool(target.get("verifySsl", False)),
-            timeout=int(target.get("timeout", DEFAULT_TIMEOUT)),
+            verify=bool(target.get('verify_ssl', False)),
+            timeout=OPNSENSE_TIMEOUT,
             headers=headers,
         )
     except requests.exceptions.ConnectTimeout:
-        raise HTTPException(status_code=504, detail=f"OPNsense 연결 시간 초과: {url}")
+        raise HTTPException(status_code=504, detail=f'OPNsense 연결 시간 초과: {url}')
     except requests.exceptions.ReadTimeout:
-        raise HTTPException(status_code=504, detail=f"OPNsense 응답 시간 초과: {url}")
+        raise HTTPException(status_code=504, detail=f'OPNsense 응답 시간 초과: {url}')
     except requests.exceptions.ConnectionError as e:
-        raise HTTPException(status_code=502, detail=f"OPNsense 연결 실패: {str(e)}")
+        raise HTTPException(status_code=502, detail=f'OPNsense 연결 실패: {str(e)}')
     except requests.exceptions.RequestException as e:
-        raise HTTPException(status_code=500, detail=f"요청 중 예외 발생: {str(e)}")
+        raise HTTPException(status_code=500, detail=f'요청 중 예외 발생: {str(e)}')
 
     try:
         data = response.json()
     except ValueError:
-        data = {"raw_text": response.text}
+        data = {'raw_text': response.text}
 
     if response.status_code >= 400:
         raise HTTPException(
             status_code=response.status_code,
-            detail={"message": "OPNsense API 오류", "url": url, "response": data},
+            detail={'message': 'OPNsense API 오류', 'url': url, 'response': data},
         )
-
     return data
 
 
-def safe_apply_firewall(target: Dict[str, Any]) -> Dict[str, Any]:
-    paths = ["/api/firewall/filter_base/apply", "/api/firewall/filter/apply"]
-    for path in paths:
-        try:
-            return opnsense_request_for_target(target, "POST", path, json_data={})
-        except Exception:
-            continue
-    return {"warning": "apply endpoint failed or not supported"}
-
-
-def safe_block(
-    target: Dict[str, Any],
-    path: str,
-    method: str = "GET",
-    json_data: Optional[Dict[str, Any]] = None,
-    default: Optional[Any] = None,
-):
+def safe_block(target: Dict[str, Any], path: str, method: str = 'GET', json_data: Optional[Dict[str, Any]] = None, default: Optional[Any] = None):
     try:
-        return opnsense_request_for_target(target, method, path, json_data=json_data)
+        return opnsense_request(target, method, path, json_data=json_data)
     except Exception as e:
         if default is None:
             default = {}
         if isinstance(default, dict):
-            return {**default, "error": str(e)}
-        return {"data": default, "error": str(e)}
+            return {**default, 'error': str(e)}
+        return {'data': default, 'error': str(e)}
+
+
+def safe_apply_firewall(target: Dict[str, Any]):
+    for path in ['/api/firewall/filter_base/apply', '/api/firewall/filter/apply']:
+        try:
+            return opnsense_request(target, 'POST', path, json_data={})
+        except Exception:
+            continue
+    return {'warning': 'apply endpoint failed or not supported'}
 
 
 def to_int(value: Any) -> int:
@@ -261,10 +219,10 @@ def to_int(value: Any) -> int:
         return 0
 
 
-def _flatten_dict(data: Any, prefix: str = "") -> Iterable[Tuple[str, Any]]:
+def _flatten_dict(data: Any, prefix: str = '') -> Iterable[Tuple[str, Any]]:
     if isinstance(data, dict):
         for key, value in data.items():
-            new_prefix = f"{prefix}.{key}" if prefix else str(key)
+            new_prefix = f'{prefix}.{key}' if prefix else str(key)
             yield from _flatten_dict(value, new_prefix)
     else:
         yield prefix, data
@@ -275,9 +233,9 @@ def _to_int(value: Any) -> int:
         return 0
     if isinstance(value, (int, float)):
         return int(value)
-    text = str(value).strip().replace(",", "")
+    text = str(value).strip().replace(',', '')
     try:
-        if text.startswith("0x"):
+        if text.startswith('0x'):
             return int(text, 16)
         return int(float(text))
     except Exception:
@@ -285,7 +243,7 @@ def _to_int(value: Any) -> int:
 
 
 def _normalize_key(key: str) -> str:
-    return "".join(ch for ch in key.lower() if ch.isalnum())
+    return ''.join(ch for ch in key.lower() if ch.isalnum())
 
 
 def _pick_first(flat: Dict[str, Any], candidates: List[str]) -> int:
@@ -302,89 +260,64 @@ def _pick_first(flat: Dict[str, Any], candidates: List[str]) -> int:
     return 0
 
 
+# ---------- summaries ----------
 def summarize_system(system_raw: Any) -> Dict[str, Any]:
     if not isinstance(system_raw, dict):
-        return {
-            "hostname": "-",
-            "platform": "-",
-            "cpu_arch": "-",
-            "uptime": "-",
-            "updates": "-",
-            "versions": [],
-        }
-
-    versions = system_raw.get("versions", [])
+        return {'hostname': '-', 'platform': '-', 'cpu_arch': '-', 'uptime': '-', 'updates': '-', 'versions': []}
+    versions = system_raw.get('versions', [])
     if not isinstance(versions, list):
         versions = []
-
-    firmware_line = versions[0] if len(versions) > 0 else ""
-    platform_line = versions[1] if len(versions) > 1 else ""
-    ssl_line = versions[2] if len(versions) > 2 else ""
-
-    cpu_arch = "-"
-    if isinstance(firmware_line, str) and "-" in firmware_line:
-        cpu_arch = firmware_line.split("-")[-1].upper()
-
+    firmware_line = versions[0] if len(versions) > 0 else ''
+    platform_line = versions[1] if len(versions) > 1 else ''
+    ssl_line = versions[2] if len(versions) > 2 else ''
+    cpu_arch = '-'
+    if isinstance(firmware_line, str) and '-' in firmware_line:
+        cpu_arch = firmware_line.split('-')[-1].upper()
     return {
-        "hostname": system_raw.get("name", "-"),
-        "platform": platform_line or "-",
-        "cpu_arch": cpu_arch,
-        "uptime": "-",
-        "firmware_line": firmware_line or "-",
-        "ssl_line": ssl_line or "-",
-        "updates": system_raw.get("updates", "-"),
-        "versions": versions,
+        'hostname': system_raw.get('name', '-'),
+        'platform': platform_line or '-',
+        'cpu_arch': cpu_arch,
+        'uptime': '-',
+        'firmware_line': firmware_line or '-',
+        'ssl_line': ssl_line or '-',
+        'updates': system_raw.get('updates', '-'),
+        'versions': versions,
     }
 
 
 def summarize_memory(memory_raw: Any) -> Dict[str, Any]:
     if not isinstance(memory_raw, dict):
-        return {
-            "total": 0,
-            "used": 0,
-            "free": 0,
-            "used_percent": 0.0,
-            "source": "unavailable",
-        }
-
-    vmstat = memory_raw.get("vmstat", {}) if isinstance(memory_raw, dict) else {}
+        return {'total': 0, 'used': 0, 'free': 0, 'used_percent': 0.0, 'source': 'unavailable'}
+    vmstat = memory_raw.get('vmstat', {}) if isinstance(memory_raw, dict) else {}
     flat = dict(_flatten_dict(vmstat))
+    page_size = _pick_first(flat, ['v_page_size', 'pagesize', 'hw.pagesize', 'vm.stats.vm.v_page_size'])
+    page_count = _pick_first(flat, ['v_page_count', 'pagecount', 'vm.stats.vm.v_page_count'])
+    physmem_bytes = _pick_first(flat, ['hw.physmem', 'physmem', 'realmem'])
+    free_count = _pick_first(flat, ['v_free_count', 'freecount', 'vm.stats.vm.v_free_count'])
+    inactive_count = _pick_first(flat, ['v_inactive_count', 'inactivecount', 'vm.stats.vm.v_inactive_count'])
+    cache_count = _pick_first(flat, ['v_cache_count', 'cachecount', 'vm.stats.vm.v_cache_count'])
+    laundry_count = _pick_first(flat, ['v_laundry_count', 'laundrycount', 'vm.stats.vm.v_laundry_count'])
 
-    page_size = _pick_first(flat, ["v_page_size", "pagesize", "hw.pagesize", "vm.stats.vm.v_page_size"])
-    page_count = _pick_first(flat, ["v_page_count", "pagecount", "vm.stats.vm.v_page_count"])
-    physmem_bytes = _pick_first(flat, ["hw.physmem", "physmem", "realmem"])
-    free_count = _pick_first(flat, ["v_free_count", "freecount", "vm.stats.vm.v_free_count"])
-    inactive_count = _pick_first(flat, ["v_inactive_count", "inactivecount", "vm.stats.vm.v_inactive_count"])
-    cache_count = _pick_first(flat, ["v_cache_count", "cachecount", "vm.stats.vm.v_cache_count"])
-    laundry_count = _pick_first(flat, ["v_laundry_count", "laundrycount", "vm.stats.vm.v_laundry_count"])
-
-    total = physmem_bytes if physmem_bytes > 0 else (page_size * page_count if page_size and page_count else 0)
+    total = physmem_bytes if physmem_bytes > 0 else page_size * page_count if page_size > 0 and page_count > 0 else 0
     available = 0
     if page_size > 0:
-        available = (free_count + inactive_count + cache_count + laundry_count) * page_size
-
+        available_pages = free_count + inactive_count + cache_count + laundry_count
+        available = available_pages * page_size
     if total > 0:
-        available = max(0, min(available, total))
+        available = max(min(available, total), 0)
         used = max(total - available, 0)
-        used_percent = round((used / total) * 100, 1) if total > 0 else 0.0
         return {
-            "total": int(total),
-            "used": int(used),
-            "free": int(available),
-            "used_percent": used_percent,
-            "source": "vmstat-system-memory",
+            'total': int(total),
+            'used': int(used),
+            'free': int(available),
+            'used_percent': round((used / total) * 100, 1) if total > 0 else 0.0,
+            'source': 'vmstat-system-memory',
         }
 
-    zone_stats = vmstat.get("memory-zone-statistics", {})
-    zones = zone_stats.get("zone", [])
+    zone_stats = vmstat.get('memory-zone-statistics', {})
+    zones = zone_stats.get('zone', [])
     if not isinstance(zones, list) or len(zones) == 0:
-        return {
-            "total": 0,
-            "used": 0,
-            "free": 0,
-            "used_percent": 0.0,
-            "source": "no-zone-data",
-        }
+        return {'total': 0, 'used': 0, 'free': 0, 'used_percent': 0.0, 'source': 'no-zone-data'}
 
     total_bytes = 0
     used_bytes = 0
@@ -392,300 +325,299 @@ def summarize_memory(memory_raw: Any) -> Dict[str, Any]:
     for zone in zones:
         if not isinstance(zone, dict):
             continue
-        size = to_int(zone.get("size"))
-        used = to_int(zone.get("used"))
-        free = to_int(zone.get("free"))
+        size = to_int(zone.get('size'))
+        used = to_int(zone.get('used'))
+        free = to_int(zone.get('free'))
         if size <= 0:
             continue
-        used_zone_bytes = size * used
-        free_zone_bytes = size * free
-        used_bytes += used_zone_bytes
-        free_bytes += free_zone_bytes
-        total_bytes += used_zone_bytes + free_zone_bytes
+        used_bytes += size * used
+        free_bytes += size * free
+        total_bytes += size * (used + free)
 
-    used_percent = round((used_bytes / total_bytes) * 100, 1) if total_bytes > 0 else 0.0
     return {
-        "total": int(total_bytes),
-        "used": int(used_bytes),
-        "free": int(free_bytes),
-        "used_percent": used_percent,
-        "source": "memory-zone-statistics-fallback",
+        'total': int(total_bytes),
+        'used': int(used_bytes),
+        'free': int(free_bytes),
+        'used_percent': round((used_bytes / total_bytes) * 100, 1) if total_bytes > 0 else 0.0,
+        'source': 'memory-zone-statistics-fallback',
     }
 
 
 def summarize_disk(disk_raw: Any) -> Dict[str, Any]:
-    devices = []
-    if isinstance(disk_raw, dict):
-        devices = disk_raw.get("devices", [])
-    elif isinstance(disk_raw, list):
-        devices = disk_raw
-
+    devices = disk_raw.get('devices', []) if isinstance(disk_raw, dict) else disk_raw if isinstance(disk_raw, list) else []
     if not isinstance(devices, list):
         devices = []
-
     root_device = None
     for device in devices:
-        if isinstance(device, dict) and device.get("mountpoint") == "/":
+        if isinstance(device, dict) and device.get('mountpoint') == '/':
             root_device = device
             break
-
-    if root_device is None and len(devices) > 0:
+    if root_device is None and devices:
         root_device = devices[0]
-
     if not isinstance(root_device, dict):
-        return {
-            "device": "-",
-            "mountpoint": "-",
-            "blocks": "0 B",
-            "used": "0 B",
-            "available": "0 B",
-            "used_pct": 0,
-        }
-
+        return {'device': '-', 'mountpoint': '-', 'blocks': '0 B', 'used': '0 B', 'available': '0 B', 'used_pct': 0}
     return {
-        "device": root_device.get("device", "-"),
-        "mountpoint": root_device.get("mountpoint", "-"),
-        "blocks": root_device.get("blocks", "0 B"),
-        "used": root_device.get("used", "0 B"),
-        "available": root_device.get("available", "0 B"),
-        "used_pct": root_device.get("used_pct", 0),
+        'device': root_device.get('device', '-'),
+        'mountpoint': root_device.get('mountpoint', '-'),
+        'blocks': root_device.get('blocks', '0 B'),
+        'used': root_device.get('used', '0 B'),
+        'available': root_device.get('available', '0 B'),
+        'used_pct': root_device.get('used_pct', 0),
     }
 
 
-@app.get("/")
+# ---------- elastic ----------
+def elastic_headers() -> Dict[str, str]:
+    headers = {'Content-Type': 'application/json'}
+    if ELASTIC_API_KEY:
+        headers['Authorization'] = f'ApiKey {ELASTIC_API_KEY}'
+    return headers
+
+
+def elastic_auth():
+    if ELASTIC_API_KEY:
+        return None
+    if ELASTIC_USERNAME and ELASTIC_PASSWORD:
+        return (ELASTIC_USERNAME, ELASTIC_PASSWORD)
+    return None
+
+
+def ensure_elastic_config():
+    if not ELASTIC_URL:
+        raise HTTPException(status_code=500, detail='ELASTIC_URL 누락')
+    if not ELASTIC_API_KEY and not (ELASTIC_USERNAME and ELASTIC_PASSWORD):
+        raise HTTPException(status_code=500, detail='Elastic 인증 정보 누락')
+
+
+def search_firewall_events(log_index: str, size: int, minutes: int, action: str = '', interface: str = '', query_text: str = '') -> List[Dict[str, Any]]:
+    ensure_elastic_config()
+    must: List[Dict[str, Any]] = [
+        {'range': {'@timestamp': {'gte': f'now-{minutes}m'}}},
+    ]
+    if action:
+        must.append({'term': {'event.action.keyword': action}})
+    if interface:
+        must.append({'term': {'observer.ingress.interface.name.keyword': interface}})
+    if query_text:
+        must.append({
+            'multi_match': {
+                'query': query_text,
+                'fields': [
+                    'source.ip', 'destination.ip', 'rule.name', 'message', 'network.transport', 'event.action'
+                ]
+            }
+        })
+
+    body = {
+        'size': size,
+        'sort': [{'@timestamp': {'order': 'desc'}}],
+        'query': {'bool': {'must': must}},
+        '_source': [
+            '@timestamp', 'event.action', 'event.kind', 'event.category', 'source.ip', 'source.port',
+            'destination.ip', 'destination.port', 'network.transport', 'network.protocol',
+            'observer.ingress.interface.name', 'observer.egress.interface.name',
+            'rule.name', 'rule.id', 'message', 'suricata.eve.alert.signature',
+            'suricata.eve.alert.category', 'suricata.eve.alert.severity', 'host.name'
+        ],
+    }
+
+    resp = requests.post(
+        f'{ELASTIC_URL}/{log_index}/_search',
+        headers=elastic_headers(),
+        auth=elastic_auth(),
+        json=body,
+        verify=ELASTIC_VERIFY_SSL,
+        timeout=20,
+    )
+    resp.raise_for_status()
+    payload = resp.json()
+    hits = payload.get('hits', {}).get('hits', [])
+    rows = []
+    for hit in hits:
+        src = hit.get('_source', {})
+        rows.append({
+            'timestamp': src.get('@timestamp', '-'),
+            'action': src.get('event', {}).get('action', src.get('message', '-')) if isinstance(src.get('event'), dict) else '-',
+            'interface': (
+                (((src.get('observer') or {}).get('ingress') or {}).get('interface') or {}).get('name')
+                or (((src.get('observer') or {}).get('egress') or {}).get('interface') or {}).get('name')
+                or '-'
+            ),
+            'protocol': src.get('network', {}).get('transport', src.get('network', {}).get('protocol', '-')) if isinstance(src.get('network'), dict) else '-',
+            'source_ip': src.get('source', {}).get('ip', '-') if isinstance(src.get('source'), dict) else '-',
+            'source_port': src.get('source', {}).get('port', '-') if isinstance(src.get('source'), dict) else '-',
+            'destination_ip': src.get('destination', {}).get('ip', '-') if isinstance(src.get('destination'), dict) else '-',
+            'destination_port': src.get('destination', {}).get('port', '-') if isinstance(src.get('destination'), dict) else '-',
+            'rule': (
+                (src.get('rule') or {}).get('name')
+                or ((src.get('suricata') or {}).get('eve') or {}).get('alert', {}).get('signature')
+                or src.get('message', '-')
+            ),
+            'severity': (((src.get('suricata') or {}).get('eve') or {}).get('alert') or {}).get('severity', '-'),
+            'category': (((src.get('suricata') or {}).get('eve') or {}).get('alert') or {}).get('category', '-'),
+            'host': src.get('host', {}).get('name', '-') if isinstance(src.get('host'), dict) else '-',
+        })
+    return rows
+
+
+# ---------- basic ----------
+@app.get('/')
 def root():
-    return {"ok": True, "message": "Backend is running"}
+    return {'ok': True, 'message': 'Backend is running'}
 
 
-@app.get("/health")
+@app.get('/health')
 def health():
-    return {"status": "running"}
+    return {'status': 'running'}
 
 
-@app.get("/api/test")
-def api_test():
-    return {"message": "backend api works"}
-
-
-@app.get("/api/firewalls")
+# ---------- firewalls ----------
+@app.get('/api/firewalls')
 def list_firewalls():
-    store = load_store()
-    return {
-        "selectedFirewallId": store.get("selected_firewall_id"),
-        "items": [public_firewall(fw) for fw in store["firewalls"]],
-    }
+    return [serialize_firewall(x) for x in load_firewalls()]
 
 
-@app.post("/api/firewalls")
+@app.post('/api/firewalls')
 def create_firewall(body: FirewallCreateBody):
-    store = load_store()
-    next_id = max([fw["id"] for fw in store["firewalls"]], default=0) + 1
+    items = load_firewalls()
     now = int(time.time())
-    firewall = {
-        "id": next_id,
-        "name": body.name.strip(),
-        "host": body.host.strip().rstrip("/"),
-        "apiKey": body.apiKey.strip(),
-        "apiSecret": body.apiSecret.strip(),
-        "verifySsl": body.verifySsl,
-        "timeout": body.timeout,
-        "createdAt": now,
-        "updatedAt": now,
+    item = {
+        'id': next_firewall_id(items),
+        'name': body.name.strip(),
+        'host': body.host.strip().rstrip('/'),
+        'api_key_enc': encrypt_text(body.api_key.strip()),
+        'api_secret_enc': encrypt_text(body.api_secret.strip()),
+        'verify_ssl': body.verify_ssl,
+        'log_index': body.log_index.strip() or 'logs-suricata.eve-*',
+        'description': body.description.strip(),
+        'created_at': now,
+        'updated_at': now,
     }
-    store["firewalls"].append(firewall)
-    if not store.get("selected_firewall_id"):
-        store["selected_firewall_id"] = next_id
-    save_store(store)
-    return {"message": "방화벽이 등록되었습니다.", "item": public_firewall(firewall)}
+    items.append(item)
+    save_firewalls(items)
+    return serialize_firewall(item)
 
 
-@app.put("/api/firewalls/{firewall_id}")
+@app.put('/api/firewalls/{firewall_id}')
 def update_firewall(firewall_id: int, body: FirewallUpdateBody):
-    store = load_store()
-    target = None
-    for fw in store["firewalls"]:
-        if fw["id"] == firewall_id:
-            target = fw
-            break
-    if target is None:
-        raise HTTPException(status_code=404, detail="방화벽을 찾을 수 없습니다.")
+    items = load_firewalls()
+    updated = None
+    for item in items:
+        if int(item.get('id', 0)) != firewall_id:
+            continue
+        if body.name is not None:
+            item['name'] = body.name.strip()
+        if body.host is not None:
+            item['host'] = body.host.strip().rstrip('/')
+        if body.api_key is not None and body.api_key.strip():
+            item['api_key_enc'] = encrypt_text(body.api_key.strip())
+        if body.api_secret is not None and body.api_secret.strip():
+            item['api_secret_enc'] = encrypt_text(body.api_secret.strip())
+        if body.verify_ssl is not None:
+            item['verify_ssl'] = body.verify_ssl
+        if body.log_index is not None:
+            item['log_index'] = body.log_index.strip() or 'logs-suricata.eve-*'
+        if body.description is not None:
+            item['description'] = body.description.strip()
+        item['updated_at'] = int(time.time())
+        updated = item
+        break
+    if updated is None:
+        raise HTTPException(status_code=404, detail='방화벽을 찾을 수 없습니다.')
+    save_firewalls(items)
+    return serialize_firewall(updated)
 
-    if body.name is not None:
-        target["name"] = body.name.strip()
-    if body.host is not None:
-        target["host"] = body.host.strip().rstrip("/")
-    if body.apiKey is not None:
-        target["apiKey"] = body.apiKey.strip()
-    if body.apiSecret is not None:
-        target["apiSecret"] = body.apiSecret.strip()
-    if body.verifySsl is not None:
-        target["verifySsl"] = body.verifySsl
-    if body.timeout is not None:
-        target["timeout"] = body.timeout
-    target["updatedAt"] = int(time.time())
 
-    save_store(store)
-    return {"message": "방화벽 정보가 수정되었습니다.", "item": public_firewall(target)}
-
-
-@app.delete("/api/firewalls/{firewall_id}")
+@app.delete('/api/firewalls/{firewall_id}')
 def delete_firewall(firewall_id: int):
-    store = load_store()
-    remaining = [fw for fw in store["firewalls"] if fw["id"] != firewall_id]
-    if len(remaining) == len(store["firewalls"]):
-        raise HTTPException(status_code=404, detail="방화벽을 찾을 수 없습니다.")
-    store["firewalls"] = remaining
-    if store.get("selected_firewall_id") == firewall_id:
-        store["selected_firewall_id"] = remaining[0]["id"] if remaining else None
-    save_store(store)
-    return {"message": "방화벽이 삭제되었습니다.", "selectedFirewallId": store.get("selected_firewall_id")}
+    items = load_firewalls()
+    next_items = [x for x in items if int(x.get('id', 0)) != firewall_id]
+    if len(next_items) == len(items):
+        raise HTTPException(status_code=404, detail='방화벽을 찾을 수 없습니다.')
+    save_firewalls(next_items)
+    return {'ok': True}
 
 
-@app.post("/api/firewalls/{firewall_id}/select")
-def select_firewall(firewall_id: int):
-    store = load_store()
-    for fw in store["firewalls"]:
-        if fw["id"] == firewall_id:
-            store["selected_firewall_id"] = firewall_id
-            save_store(store)
-            return {"message": "선택된 방화벽이 변경되었습니다.", "selectedFirewallId": firewall_id}
-    raise HTTPException(status_code=404, detail="방화벽을 찾을 수 없습니다.")
-
-
-@app.post("/api/firewalls/{firewall_id}/test")
-def test_firewall(firewall_id: int):
-    target = get_firewall_or_404(firewall_id)
-    data = opnsense_request_for_target(target, "POST", "/api/core/firmware/status", json_data={})
-    return {"message": "연결 성공", "product": data.get("product", {}) if isinstance(data, dict) else {}}
-
-
-@app.get("/api/opnsense/ping")
-def opnsense_ping():
-    fw = get_selected_firewall_or_404()
-    return {
-        "configured": True,
-        "selectedFirewallId": fw["id"],
-        "host": fw["host"],
-        "verifySsl": fw.get("verifySsl", False),
-        "timeout": fw.get("timeout", DEFAULT_TIMEOUT),
-    }
-
-
-@app.get("/api/opnsense/dashboard/{firewall_id}")
+# ---------- per-firewall opnsense ----------
+@app.get('/api/firewalls/{firewall_id}/dashboard')
 def dashboard(firewall_id: int):
     target = get_firewall_or_404(firewall_id)
-
-    status_data = safe_block(target, "/api/core/firmware/status", method="POST", json_data={}, default={})
-    rules_data = safe_block(target, "/api/firewall/filter/searchRule", method="GET", default={"rows": []})
-    system_data = safe_block(target, "/api/diagnostics/system/system_information", method="GET", default={})
-    interfaces_data = safe_block(target, "/api/interfaces/overview/export", method="GET", default={})
-    services_data = safe_block(target, "/api/core/service/search", method="GET", default={})
-    traffic_data = safe_block(target, "/api/diagnostics/interface/get_interface_statistics", method="GET", default={})
-    memory_data = safe_block(target, "/api/diagnostics/system/memory", method="GET", default={})
-    disk_data = safe_block(target, "/api/diagnostics/system/system_disk", method="GET", default={"devices": []})
-    aliases_data = safe_block(target, "/api/firewall/alias_util/aliases", method="GET", default=[])
+    status_data = safe_block(target, '/api/core/firmware/status', method='POST', json_data={}, default={})
+    rules_data = safe_block(target, '/api/firewall/filter/searchRule', method='GET', default={'rows': []})
+    system_data = safe_block(target, '/api/diagnostics/system/system_information', method='GET', default={})
+    interfaces_data = safe_block(target, '/api/interfaces/overview/export', method='GET', default={})
+    services_data = safe_block(target, '/api/core/service/search', method='GET', default={})
+    traffic_data = safe_block(target, '/api/diagnostics/interface/get_interface_statistics', method='GET', default={})
+    memory_data = safe_block(target, '/api/diagnostics/system/memory', method='GET', default={})
+    disk_data = safe_block(target, '/api/diagnostics/system/system_disk', method='GET', default={'devices': []})
+    aliases_data = safe_block(target, '/api/firewall/alias_util/aliases', method='GET', default=[])
 
     return {
-        "firewall": public_firewall(target),
-        "status": status_data,
-        "product": status_data.get("product", {}) if isinstance(status_data, dict) else {},
-        "rules": rules_data if isinstance(rules_data, dict) else {"rows": []},
-        "system": system_data,
-        "system_summary": summarize_system(system_data),
-        "interfaces": interfaces_data,
-        "services": services_data,
-        "traffic": traffic_data,
-        "memory": memory_data,
-        "memory_summary": summarize_memory(memory_data),
-        "disk": disk_data,
-        "disk_summary": summarize_disk(disk_data),
-        "aliases": aliases_data,
+        'status': status_data,
+        'product': status_data.get('product', {}) if isinstance(status_data, dict) else {},
+        'rules': rules_data if isinstance(rules_data, dict) else {'rows': []},
+        'system': system_data,
+        'system_summary': summarize_system(system_data),
+        'interfaces': interfaces_data,
+        'services': services_data,
+        'traffic': traffic_data,
+        'memory': memory_data,
+        'memory_summary': summarize_memory(memory_data),
+        'disk': disk_data,
+        'disk_summary': summarize_disk(disk_data),
+        'aliases': aliases_data,
+        'firewall': serialize_firewall(target),
     }
 
 
-@app.get("/api/opnsense/rules/{firewall_id}")
+@app.get('/api/firewalls/{firewall_id}/rules')
 def get_rules(firewall_id: int):
     target = get_firewall_or_404(firewall_id)
-    return opnsense_request_for_target(target, "GET", "/api/firewall/filter/searchRule")
+    return opnsense_request(target, 'GET', '/api/firewall/filter/searchRule')
 
 
-@app.post("/api/opnsense/rules/{firewall_id}")
+@app.post('/api/firewalls/{firewall_id}/rules')
 def add_rule(firewall_id: int, body: RuleCreateBody):
     target = get_firewall_or_404(firewall_id)
     payload = {
-        "rule": {
-            "enabled": body.enabled,
-            "quick": body.quick,
-            "action": body.action,
-            "interface": body.interface,
-            "direction": body.direction,
-            "ipprotocol": "inet",
-            "protocol": body.protocol,
-            "source_net": body.sourceNet,
-            "source_port": body.sourcePort,
-            "destination_net": body.destinationNet,
-            "destination_port": body.destinationPort,
-            "description": body.description or "API rule",
-            "log": "1" if body.log else "0",
+        'rule': {
+            'enabled': body.enabled,
+            'quick': body.quick,
+            'action': body.action,
+            'interface': body.interface,
+            'direction': body.direction,
+            'ipprotocol': 'inet',
+            'protocol': body.protocol,
+            'source_net': body.sourceNet,
+            'source_port': body.sourcePort,
+            'destination_net': body.destinationNet,
+            'destination_port': body.destinationPort,
+            'description': body.description or 'API rule',
+            'log': '1' if body.log else '0',
         }
     }
-    result = opnsense_request_for_target(target, "POST", "/api/firewall/filter/addRule", json_data=payload)
+    result = opnsense_request(target, 'POST', '/api/firewall/filter/addRule', json_data=payload)
     apply_result = safe_apply_firewall(target)
-    return {"message": "Rule added successfully", "result": result, "apply": apply_result}
+    return {'message': 'Rule added successfully', 'result': result, 'apply': apply_result}
 
 
-@app.delete("/api/opnsense/rules/{firewall_id}/{uuid}")
+@app.delete('/api/firewalls/{firewall_id}/rules/{uuid}')
 def delete_rule(firewall_id: int, uuid: str):
     target = get_firewall_or_404(firewall_id)
-    result = opnsense_request_for_target(target, "POST", f"/api/firewall/filter/delRule/{uuid}", json_data={})
+    result = opnsense_request(target, 'POST', f'/api/firewall/filter/delRule/{uuid}', json_data={})
     apply_result = safe_apply_firewall(target)
-    return {"message": "Rule deleted successfully", "result": result, "apply": apply_result}
+    return {'message': 'Rule deleted successfully', 'result': result, 'apply': apply_result}
 
 
-@app.get("/api/opnsense/aliases/{firewall_id}")
-def list_aliases(firewall_id: int):
+@app.post('/api/firewalls/{firewall_id}/event-logs')
+def get_event_logs(firewall_id: int, body: EventLogsQueryBody):
     target = get_firewall_or_404(firewall_id)
-    return opnsense_request_for_target(target, "GET", "/api/firewall/alias_util/aliases")
-
-
-@app.get("/api/opnsense/alias/{firewall_id}/{alias_name}")
-def get_alias_entries(firewall_id: int, alias_name: str):
-    target = get_firewall_or_404(firewall_id)
-    safe_alias = quote(alias_name, safe="")
-    return opnsense_request_for_target(target, "GET", f"/api/firewall/alias_util/list/{safe_alias}")
-
-
-@app.post("/api/opnsense/alias/{firewall_id}/{alias_name}/add")
-def add_alias_entry(firewall_id: int, alias_name: str, body: AliasAddressBody):
-    target = get_firewall_or_404(firewall_id)
-    safe_alias = quote(alias_name, safe="")
-    return opnsense_request_for_target(
-        target, "POST", f"/api/firewall/alias_util/add/{safe_alias}", json_data={"address": body.address}
+    rows = search_firewall_events(
+        log_index=target.get('log_index', 'logs-suricata.eve-*'),
+        size=max(1, min(body.size, 200)),
+        minutes=max(1, min(body.minutes, 24 * 60)),
+        action=body.action.strip(),
+        interface=body.interface.strip(),
+        query_text=body.query.strip(),
     )
-
-
-@app.post("/api/opnsense/alias/{firewall_id}/{alias_name}/delete")
-def delete_alias_entry(firewall_id: int, alias_name: str, body: AliasAddressBody):
-    target = get_firewall_or_404(firewall_id)
-    safe_alias = quote(alias_name, safe="")
-    return opnsense_request_for_target(
-        target, "POST", f"/api/firewall/alias_util/delete/{safe_alias}", json_data={"address": body.address}
-    )
-
-
-@app.get("/api/opnsense/debug/all/{firewall_id}")
-def debug_all(firewall_id: int):
-    target = get_firewall_or_404(firewall_id)
-    system_raw = safe_block(target, "/api/diagnostics/system/system_information", "GET", default={})
-    memory_raw = safe_block(target, "/api/diagnostics/system/memory", "GET", default={})
-    disk_raw = safe_block(target, "/api/diagnostics/system/system_disk", "GET", default={})
-    traffic_raw = safe_block(target, "/api/diagnostics/interface/get_interface_statistics", "GET", default={})
-    return {
-        "system": system_raw,
-        "system_summary": summarize_system(system_raw),
-        "memory": memory_raw,
-        "memory_summary": summarize_memory(memory_raw),
-        "disk": disk_raw,
-        "disk_summary": summarize_disk(disk_raw),
-        "traffic": traffic_raw,
-    }
+    return {'rows': rows, 'firewall': serialize_firewall(target)}
