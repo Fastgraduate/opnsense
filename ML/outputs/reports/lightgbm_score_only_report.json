@@ -1,0 +1,44 @@
+{
+  "Cross_Site_Scripting":{
+    "precision":0.9462809917,
+    "recall":0.9870689655,
+    "f1-score":0.9662447257,
+    "support":232.0
+  },
+  "Normal":{
+    "precision":0.9993656432,
+    "recall":0.9997461607,
+    "f1-score":0.9995558657,
+    "support":7879.0
+  },
+  "PortScan":{
+    "precision":0.9735682819,
+    "recall":0.9608695652,
+    "f1-score":0.9671772429,
+    "support":460.0
+  },
+  "SQL_Injection":{
+    "precision":0.9970014993,
+    "recall":0.9866468843,
+    "f1-score":0.9917971663,
+    "support":674.0
+  },
+  "accuracy":{
+    "precision":0.9965386696,
+    "recall":0.9965386696,
+    "f1-score":0.9965386696,
+    "support":0.9965386696
+  },
+  "macro avg":{
+    "precision":0.979054104,
+    "recall":0.9835828939,
+    "f1-score":0.9811937502,
+    "support":9245.0
+  },
+  "weighted avg":{
+    "precision":0.9965775569,
+    "recall":0.9965386696,
+    "f1-score":0.9965432411,
+    "support":9245.0
+  }
+}
