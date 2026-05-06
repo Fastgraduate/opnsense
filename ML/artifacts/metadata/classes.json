@@ -1,8 +1,0 @@
-{
-  "classes": [
-    "Normal",
-    "SQL_Injection",
-    "Cross_Site_Scripting",
-    "PortScan"
-  ]
-}

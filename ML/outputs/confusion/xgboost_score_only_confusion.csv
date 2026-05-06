@@ -1,5 +1,0 @@
-,Normal,SQL_Injection,Cross_Site_Scripting,PortScan
-Normal,7878,0,0,1
-SQL_Injection,0,665,1,8
-Cross_Site_Scripting,0,1,229,2
-PortScan,4,3,13,440
