@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+
+# Raw datasets and generated datasets
+202506_web_data_set.Zip
+data/raw/*
+data/interim/*
+data/processed/*
+
+# Model artifacts
+artifacts/models/*
+artifacts/vectorizers/*
+artifacts/vocab/*
+
+# Output reports
+outputs/reports/*
+outputs/confusion/*
+outputs/error_analysis/*
+outputs/analysis/*
+
+# Keep empty directories
+!data/raw/.gitkeep
+!data/interim/.gitkeep
+!data/processed/.gitkeep
+!artifacts/models/.gitkeep
+!artifacts/vectorizers/.gitkeep
+!artifacts/vocab/.gitkeep
+!outputs/reports/.gitkeep
+!outputs/confusion/.gitkeep
+!outputs/error_analysis/.gitkeep
+!outputs/analysis/.gitkeep
