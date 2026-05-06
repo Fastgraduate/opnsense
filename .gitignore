@@ -33,3 +33,37 @@ outputs/analysis/*
 !outputs/confusion/.gitkeep
 !outputs/error_analysis/.gitkeep
 !outputs/analysis/.gitkeep
+
+@"
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+
+# ML datasets and generated outputs
+ml_web_attack/data/raw/*
+ml_web_attack/data/interim/*
+ml_web_attack/data/processed/*
+ml_web_attack/artifacts/models/*
+ml_web_attack/artifacts/vectorizers/*
+ml_web_attack/artifacts/vocab/*
+ml_web_attack/outputs/reports/*
+ml_web_attack/outputs/confusion/*
+ml_web_attack/outputs/error_analysis/*
+ml_web_attack/outputs/analysis/*
+
+# Keep empty directories
+!ml_web_attack/data/raw/.gitkeep
+!ml_web_attack/data/interim/.gitkeep
+!ml_web_attack/data/processed/.gitkeep
+!ml_web_attack/artifacts/models/.gitkeep
+!ml_web_attack/artifacts/vectorizers/.gitkeep
+!ml_web_attack/artifacts/vocab/.gitkeep
+!ml_web_attack/outputs/reports/.gitkeep
+!ml_web_attack/outputs/confusion/.gitkeep
+!ml_web_attack/outputs/error_analysis/.gitkeep
+!ml_web_attack/outputs/analysis/.gitkeep
+"@ | Add-Content .gitignore
