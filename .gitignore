@@ -67,3 +67,30 @@ ml_web_attack/outputs/analysis/*
 !ml_web_attack/outputs/error_analysis/.gitkeep
 !ml_web_attack/outputs/analysis/.gitkeep
 "@ | Add-Content .gitignore
+
+@"
+
+# ML datasets and generated outputs
+ml/data/raw/*
+ml/data/interim/*
+ml/data/processed/*
+ml/artifacts/models/*
+ml/artifacts/vectorizers/*
+ml/artifacts/vocab/*
+ml/outputs/reports/*
+ml/outputs/confusion/*
+ml/outputs/error_analysis/*
+ml/outputs/analysis/*
+
+# Keep ML directory structure
+!ml/data/raw/.gitkeep
+!ml/data/interim/.gitkeep
+!ml/data/processed/.gitkeep
+!ml/artifacts/models/.gitkeep
+!ml/artifacts/vectorizers/.gitkeep
+!ml/artifacts/vocab/.gitkeep
+!ml/outputs/reports/.gitkeep
+!ml/outputs/confusion/.gitkeep
+!ml/outputs/error_analysis/.gitkeep
+!ml/outputs/analysis/.gitkeep
+"@ | Add-Content .gitignore
