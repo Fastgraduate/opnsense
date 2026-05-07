@@ -33,6 +33,7 @@ function App() {
       message: '대시보드 초기화 완료',
     },
   ])
+
   const [form, setForm] = useState({
     description: '',
     action: 'pass',
@@ -63,6 +64,7 @@ function App() {
       },
       ...prev,
     ])
+
   const parseErrorMessage = (data, fallback) => {
     if (!data) return fallback
     if (typeof data === 'string') return data
@@ -72,6 +74,7 @@ function App() {
     if (data.error) return data.error
     return fallback
   }
+
   const toNumber = (value) => {
     if (value == null) return 0
     if (typeof value === 'number') return Number.isFinite(value) ? value : 0
@@ -86,6 +89,7 @@ function App() {
     if (Array.isArray(traffic?.rows)) return traffic.rows
     if (Array.isArray(traffic?.interfaces)) return traffic.interfaces
     if (Array.isArray(traffic?.data)) return traffic.data
+
     if (traffic?.statistics && typeof traffic.statistics === 'object') {
       return Object.entries(traffic.statistics).map(([rawKey, value]) => {
         let iface = rawKey
@@ -93,6 +97,7 @@ function App() {
         else if (rawKey.includes('(em1)')) iface = 'em1'
         else if (rawKey.includes('(em2)')) iface = 'em2'
         else if (rawKey.includes('(lo0)')) iface = 'lo0'
+
         return {
           name: iface,
           rawKey,
@@ -100,13 +105,16 @@ function App() {
         }
       })
     }
-    if (typeof traffic === 'object')
+
+    if (typeof traffic === 'object') {
       return Object.entries(traffic)
         .filter(([key]) => key !== 'error')
         .map(([name, value]) => ({
           name,
           ...(typeof value === 'object' ? value : { value }),
         }))
+    }
+
     return []
   }
 
@@ -122,16 +130,20 @@ function App() {
   const extractInterfaceCounters = (row) => {
     const source = row || {}
     const entries = Object.entries(source)
+
     const findMetric = (patterns) => {
       for (const [rawKey, rawValue] of entries) {
         const key = String(rawKey)
           .toLowerCase()
           .replace(/[\s_\-:/()[\].]/g, '')
-        if (patterns.some((pattern) => key.includes(pattern)))
+
+        if (patterns.some((pattern) => key.includes(pattern))) {
           return toNumber(rawValue)
+        }
       }
       return 0
     }
+
     return {
       rxBytes: findMetric([
         'bytesreceived',
@@ -179,12 +191,14 @@ function App() {
 
   const buildCurrentInterfaceStats = (rows) => {
     const grouped = {}
+
     rows.forEach((row, index) => {
       const label = extractInterfaceGroupLabel(
         row?.name || `interface-${index + 1}`,
       )
       const counters = extractInterfaceCounters(row)
-      if (!grouped[label])
+
+      if (!grouped[label]) {
         grouped[label] = {
           id: label,
           label,
@@ -199,6 +213,8 @@ function App() {
           totalBytes: 0,
           totalPackets: 0,
         }
+      }
+
       grouped[label].rxBytes += counters.rxBytes
       grouped[label].txBytes += counters.txBytes
       grouped[label].rxPackets += counters.rxPackets
@@ -208,6 +224,7 @@ function App() {
       grouped[label].totalPackets =
         grouped[label].rxPackets + grouped[label].txPackets
     })
+
     return Object.values(grouped).filter(
       (x) => x.totalBytes > 0 || x.totalPackets > 0,
     )
@@ -217,16 +234,20 @@ function App() {
     const rows = normalizeTrafficRows(traffic)
     const currentStats = buildCurrentInterfaceStats(rows)
     setCurrentInterfaceStats(currentStats)
+
     const now = Date.now()
     const prev = lastTrafficRef.current
+
     const currentMap = {}
     currentStats.forEach((item) => {
       currentMap[item.interface] = item
     })
+
     if (!prev) {
       lastTrafficRef.current = { timestamp: now, interfaces: currentMap }
       return
     }
+
     const elapsedSeconds = Math.max((now - prev.timestamp) / 1000, 1)
     const interfaceNames = Array.from(
       new Set([
@@ -234,55 +255,72 @@ function App() {
         ...Object.keys(currentMap || {}),
       ]),
     )
+
     const nextPoint = {
       time: new Date(now).toLocaleTimeString(),
       timestamp: now,
     }
+
     interfaceNames.forEach((name) => {
       const prevItem = prev.interfaces?.[name]
       const currentItem = currentMap?.[name]
+
       const prevRx =
         prevItem?.rxBytes > 0 ? prevItem.rxBytes : prevItem?.rxPackets || 0
       const currentRx =
         currentItem?.rxBytes > 0
           ? currentItem.rxBytes
           : currentItem?.rxPackets || 0
+
       const prevTx =
         prevItem?.txBytes > 0 ? prevItem.txBytes : prevItem?.txPackets || 0
       const currentTx =
         currentItem?.txBytes > 0
           ? currentItem.txBytes
           : currentItem?.txPackets || 0
+
       nextPoint[`rx_${name}`] = Math.max(currentRx - prevRx, 0) / elapsedSeconds
       nextPoint[`tx_${name}`] = Math.max(currentTx - prevTx, 0) / elapsedSeconds
     })
+
     setTrafficHistory((prevHistory) =>
       [...prevHistory, nextPoint].slice(-TRAFFIC_HISTORY_LIMIT),
     )
+
     lastTrafficRef.current = { timestamp: now, interfaces: currentMap }
   }
 
   const fetchFirewalls = async () => {
     const res = await fetch(`${API_BASE}/api/firewalls`)
     const data = await res.json()
-    if (!res.ok)
+
+    if (!res.ok) {
       throw new Error(parseErrorMessage(data, '방화벽 목록 조회 실패'))
+    }
+
     setFirewalls(Array.isArray(data) ? data : [])
-    if (!selectedFirewallId && Array.isArray(data) && data.length > 0)
+
+    if (!selectedFirewallId && Array.isArray(data) && data.length > 0) {
       setSelectedFirewallId(data[0].id)
+    }
   }
 
   const fetchDashboard = async () => {
     if (!selectedFirewallId) return
+
     try {
       setLoading(true)
       setError('')
+
       const res = await fetch(
         `${API_BASE}/api/firewalls/${selectedFirewallId}/dashboard`,
       )
       const data = await res.json()
-      if (!res.ok)
+
+      if (!res.ok) {
         throw new Error(parseErrorMessage(data, '대시보드 조회 실패'))
+      }
+
       setDashboard(data)
       updateTrafficRateHistory(data?.traffic)
       addLog('INFO', `${data?.firewall?.name || '방화벽'} 대시보드 갱신 완료`)
@@ -298,9 +336,11 @@ function App() {
   useEffect(() => {
     fetchFirewalls().catch((e) => setError(e.message))
   }, [])
+
   useEffect(() => {
     fetchDashboard()
   }, [selectedFirewallId])
+
   useEffect(() => {
     if (!autoRefresh || !selectedFirewallId) return
     const interval = setInterval(fetchDashboard, 5000)
@@ -314,6 +354,7 @@ function App() {
       [name]: type === 'checkbox' ? checked : value,
     }))
   }
+
   const resetForm = () =>
     setForm({
       description: '',
@@ -329,34 +370,79 @@ function App() {
       quick: '1',
       log: false,
     })
+
   const onCreateFirewall = async (payload) => {
     const res = await fetch(`${API_BASE}/api/firewalls`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     })
+
     const data = await res.json()
-    if (!res.ok) throw new Error(parseErrorMessage(data, '방화벽 등록 실패'))
+
+    if (!res.ok) {
+      throw new Error(parseErrorMessage(data, '방화벽 등록 실패'))
+    }
+
     await fetchFirewalls()
     setSelectedFirewallId(data.id)
     addLog('INFO', `방화벽 등록: ${data.name}`)
   }
+
+  const onUpdateFirewall = async (firewallId, payload) => {
+    const res = await fetch(`${API_BASE}/api/firewalls/${firewallId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+
+    const data = await res.json().catch(() => ({}))
+
+    if (!res.ok) {
+      throw new Error(parseErrorMessage(data, '방화벽 수정 실패'))
+    }
+
+    await fetchFirewalls()
+
+    if (selectedFirewallId === firewallId) {
+      await fetchDashboard()
+    }
+
+    addLog('INFO', `방화벽 수정: ${data.name || firewallId}`)
+    return data
+  }
+
   const onDeleteFirewall = async (firewallId) => {
     if (!window.confirm('정말 삭제할까요?')) return
+
     const res = await fetch(`${API_BASE}/api/firewalls/${firewallId}`, {
       method: 'DELETE',
     })
     const data = await res.json().catch(() => ({}))
-    if (!res.ok) throw new Error(parseErrorMessage(data, '방화벽 삭제 실패'))
+
+    if (!res.ok) {
+      throw new Error(parseErrorMessage(data, '방화벽 삭제 실패'))
+    }
+
     await fetchFirewalls()
-    if (selectedFirewallId === firewallId) setSelectedFirewallId(null)
+
+    if (selectedFirewallId === firewallId) {
+      setSelectedFirewallId(null)
+      setDashboard(null)
+      setTrafficHistory([])
+      setCurrentInterfaceStats([])
+    }
+
     addLog('WARN', `방화벽 삭제: ${firewallId}`)
   }
+
   const handleAddRule = async (e) => {
     e.preventDefault()
     if (!selectedFirewallId) return
+
     try {
       setSubmitting(true)
+
       const res = await fetch(
         `${API_BASE}/api/firewalls/${selectedFirewallId}/rules`,
         {
@@ -366,7 +452,11 @@ function App() {
         },
       )
       const data = await res.json()
-      if (!res.ok) throw new Error(parseErrorMessage(data, '룰 추가 실패'))
+
+      if (!res.ok) {
+        throw new Error(parseErrorMessage(data, '룰 추가 실패'))
+      }
+
       addLog('INFO', `룰 추가 성공: ${form.description || '설명 없음'}`)
       resetForm()
       await fetchDashboard()
@@ -379,17 +469,24 @@ function App() {
       setSubmitting(false)
     }
   }
+
   const handleDeleteRule = async (uuid, description) => {
     if (!selectedFirewallId || !uuid) return
-    if (!window.confirm(`정말 삭제할까요?\n\n${description || '설명 없음'}`))
+    if (!window.confirm(`정말 삭제할까요?\n\n${description || '설명 없음'}`)) {
       return
+    }
+
     try {
       const res = await fetch(
         `${API_BASE}/api/firewalls/${selectedFirewallId}/rules/${uuid}`,
         { method: 'DELETE' },
       )
       const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(parseErrorMessage(data, '룰 삭제 실패'))
+
+      if (!res.ok) {
+        throw new Error(parseErrorMessage(data, '룰 삭제 실패'))
+      }
+
       addLog('WARN', `룰 삭제 성공: ${description || uuid}`)
       await fetchDashboard()
     } catch (err) {
@@ -398,8 +495,12 @@ function App() {
       addLog('ERROR', msg)
     }
   }
+
   const fetchEventLogs = async (filters) => {
-    if (!selectedFirewallId) throw new Error('방화벽을 먼저 선택하세요.')
+    if (!selectedFirewallId) {
+      throw new Error('방화벽을 먼저 선택하세요.')
+    }
+
     const res = await fetch(
       `${API_BASE}/api/firewalls/${selectedFirewallId}/event-logs`,
       {
@@ -409,14 +510,18 @@ function App() {
       },
     )
     const data = await res.json()
-    if (!res.ok)
+
+    if (!res.ok) {
       throw new Error(parseErrorMessage(data, '이벤트 로그 조회 실패'))
+    }
+
     return data
   }
 
   const rules = Array.isArray(dashboard?.rules?.rows)
     ? dashboard.rules.rows
     : []
+
   const aliasesRaw = dashboard?.aliases
   const aliases = Array.isArray(aliasesRaw)
     ? aliasesRaw
@@ -427,6 +532,7 @@ function App() {
   return (
     <div className="app-shell">
       <Sidebar currentPage={currentPage} setCurrentPage={setCurrentPage} />
+
       <main className="content">
         <div className="top-actions page-tools">
           <button
@@ -435,6 +541,7 @@ function App() {
           >
             {loading ? '불러오는 중...' : '🔄 새로고침'}
           </button>
+
           <label className="checkbox-inline">
             <input
               type="checkbox"
@@ -443,6 +550,7 @@ function App() {
             />
             자동 갱신(5초)
           </label>
+
           <select
             value={selectedFirewallId || ''}
             onChange={(e) =>
@@ -456,11 +564,14 @@ function App() {
               </option>
             ))}
           </select>
+
           <span className="rule-count">
             현재 대상: {selectedFirewall?.name || '없음'}
           </span>
         </div>
+
         {error && <div className="error card">에러: {error}</div>}
+
         {currentPage === 'dashboard' && (
           <DashboardPage
             product={dashboard?.product || dashboard?.status?.product || null}
@@ -482,6 +593,7 @@ function App() {
             currentInterfaceStats={currentInterfaceStats}
           />
         )}
+
         {currentPage === 'rules' && (
           <RulesPage
             rules={rules}
@@ -497,21 +609,25 @@ function App() {
             selectedFirewall={selectedFirewall}
           />
         )}
+
         {currentPage === 'eventLogs' && (
           <FirewallEventLogsPage
             selectedFirewall={selectedFirewall}
             fetchEventLogs={fetchEventLogs}
           />
         )}
+
         {currentPage === 'firewalls' && (
           <FirewallManagerPage
             firewalls={firewalls}
             selectedFirewallId={selectedFirewallId}
             setSelectedFirewallId={setSelectedFirewallId}
             onCreateFirewall={onCreateFirewall}
+            onUpdateFirewall={onUpdateFirewall}
             onDeleteFirewall={onDeleteFirewall}
           />
         )}
+
         {currentPage === 'logs' && <LogsPage logs={logs} setLogs={setLogs} />}
       </main>
     </div>
