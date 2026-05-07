@@ -1,0 +1,96 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+
+# Raw datasets and generated datasets
+202506_web_data_set.Zip
+data/raw/*
+data/interim/*
+data/processed/*
+
+# Model artifacts
+artifacts/models/*
+artifacts/vectorizers/*
+artifacts/vocab/*
+
+# Output reports
+outputs/reports/*
+outputs/confusion/*
+outputs/error_analysis/*
+outputs/analysis/*
+
+# Keep empty directories
+!data/raw/.gitkeep
+!data/interim/.gitkeep
+!data/processed/.gitkeep
+!artifacts/models/.gitkeep
+!artifacts/vectorizers/.gitkeep
+!artifacts/vocab/.gitkeep
+!outputs/reports/.gitkeep
+!outputs/confusion/.gitkeep
+!outputs/error_analysis/.gitkeep
+!outputs/analysis/.gitkeep
+
+@"
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+
+# ML datasets and generated outputs
+ml_web_attack/data/raw/*
+ml_web_attack/data/interim/*
+ml_web_attack/data/processed/*
+ml_web_attack/artifacts/models/*
+ml_web_attack/artifacts/vectorizers/*
+ml_web_attack/artifacts/vocab/*
+ml_web_attack/outputs/reports/*
+ml_web_attack/outputs/confusion/*
+ml_web_attack/outputs/error_analysis/*
+ml_web_attack/outputs/analysis/*
+
+# Keep empty directories
+!ml_web_attack/data/raw/.gitkeep
+!ml_web_attack/data/interim/.gitkeep
+!ml_web_attack/data/processed/.gitkeep
+!ml_web_attack/artifacts/models/.gitkeep
+!ml_web_attack/artifacts/vectorizers/.gitkeep
+!ml_web_attack/artifacts/vocab/.gitkeep
+!ml_web_attack/outputs/reports/.gitkeep
+!ml_web_attack/outputs/confusion/.gitkeep
+!ml_web_attack/outputs/error_analysis/.gitkeep
+!ml_web_attack/outputs/analysis/.gitkeep
+"@ | Add-Content .gitignore
+
+@"
+
+# ML datasets and generated outputs
+ml/data/raw/*
+ml/data/interim/*
+ml/data/processed/*
+ml/artifacts/models/*
+ml/artifacts/vectorizers/*
+ml/artifacts/vocab/*
+ml/outputs/reports/*
+ml/outputs/confusion/*
+ml/outputs/error_analysis/*
+ml/outputs/analysis/*
+
+# Keep ML directory structure
+!ml/data/raw/.gitkeep
+!ml/data/interim/.gitkeep
+!ml/data/processed/.gitkeep
+!ml/artifacts/models/.gitkeep
+!ml/artifacts/vectorizers/.gitkeep
+!ml/artifacts/vocab/.gitkeep
+!ml/outputs/reports/.gitkeep
+!ml/outputs/confusion/.gitkeep
+!ml/outputs/error_analysis/.gitkeep
+!ml/outputs/analysis/.gitkeep
+"@ | Add-Content .gitignore
