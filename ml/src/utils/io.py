@@ -31,10 +31,8 @@ def write_csv(df: pd.DataFrame, path: str | Path) -> None:
     df.to_csv(path, index=False, encoding="utf-8-sig")
 
 
-def read_csv(path: str | Path) -> pd.DataFrame:
-    for enc in ("utf-8-sig", "utf-8", "cp949", "latin1"):
-        try:
-            return pd.read_csv(path, encoding=enc)
-        except Exception:
-            continue
-    return pd.read_csv(path)
+def read_csv(path):
+    path = Path(path).resolve()
+
+    with path.open("r", encoding="utf-8-sig", newline="") as f:
+        return pd.read_csv(f)

@@ -1,3 +1,4 @@
+# char TF-IDF, word TF-IDF, dense feature 등 피처별 성능 비교
 from __future__ import annotations
 
 import argparse

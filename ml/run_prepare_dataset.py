@@ -1,3 +1,5 @@
+# 원본 CSV/ZIP을 읽어서 정제하고 train/valid/test로 나눔
+
 from __future__ import annotations
 
 import argparse
