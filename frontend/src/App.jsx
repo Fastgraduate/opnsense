@@ -93,6 +93,7 @@ function App() {
     if (traffic?.statistics && typeof traffic.statistics === 'object') {
       return Object.entries(traffic.statistics).map(([rawKey, value]) => {
         let iface = rawKey
+
         if (rawKey.includes('(em0)')) iface = 'em0'
         else if (rawKey.includes('(em1)')) iface = 'em1'
         else if (rawKey.includes('(em2)')) iface = 'em2'
@@ -141,6 +142,7 @@ function App() {
           return toNumber(rawValue)
         }
       }
+
       return 0
     }
 
@@ -219,6 +221,9 @@ function App() {
       grouped[label].txBytes += counters.txBytes
       grouped[label].rxPackets += counters.rxPackets
       grouped[label].txPackets += counters.txPackets
+      grouped[label].rxErrors += counters.rxErrors
+      grouped[label].txErrors += counters.txErrors
+      grouped[label].collisions += counters.collisions
       grouped[label].totalBytes =
         grouped[label].rxBytes + grouped[label].txBytes
       grouped[label].totalPackets =
@@ -233,6 +238,7 @@ function App() {
   const updateTrafficRateHistory = (traffic) => {
     const rows = normalizeTrafficRows(traffic)
     const currentStats = buildCurrentInterfaceStats(rows)
+
     setCurrentInterfaceStats(currentStats)
 
     const now = Date.now()
@@ -298,10 +304,11 @@ function App() {
       throw new Error(parseErrorMessage(data, '방화벽 목록 조회 실패'))
     }
 
-    setFirewalls(Array.isArray(data) ? data : [])
+    const list = Array.isArray(data) ? data : []
+    setFirewalls(list)
 
-    if (!selectedFirewallId && Array.isArray(data) && data.length > 0) {
-      setSelectedFirewallId(data[0].id)
+    if (!selectedFirewallId && list.length > 0) {
+      setSelectedFirewallId(list[0].id)
     }
   }
 
@@ -333,6 +340,20 @@ function App() {
     }
   }
 
+  const handleSelectFirewall = (firewallId) => {
+    const nextId = Number(firewallId) || null
+
+    setSelectedFirewallId(nextId)
+    setDashboard(null)
+    setTrafficHistory([])
+    setCurrentInterfaceStats([])
+    lastTrafficRef.current = null
+  }
+
+  const handleToggleAutoRefresh = () => {
+    setAutoRefresh((prev) => !prev)
+  }
+
   useEffect(() => {
     fetchFirewalls().catch((e) => setError(e.message))
   }, [])
@@ -343,12 +364,15 @@ function App() {
 
   useEffect(() => {
     if (!autoRefresh || !selectedFirewallId) return
+
     const interval = setInterval(fetchDashboard, 5000)
+
     return () => clearInterval(interval)
   }, [autoRefresh, selectedFirewallId])
 
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target
+
     setForm((prev) => ({
       ...prev,
       [name]: type === 'checkbox' ? checked : value,
@@ -409,6 +433,7 @@ function App() {
     }
 
     addLog('INFO', `방화벽 수정: ${data.name || firewallId}`)
+
     return data
   }
 
@@ -431,6 +456,7 @@ function App() {
       setDashboard(null)
       setTrafficHistory([])
       setCurrentInterfaceStats([])
+      lastTrafficRef.current = null
     }
 
     addLog('WARN', `방화벽 삭제: ${firewallId}`)
@@ -534,42 +560,6 @@ function App() {
       <Sidebar currentPage={currentPage} setCurrentPage={setCurrentPage} />
 
       <main className="content">
-        <div className="top-actions page-tools">
-          <button
-            onClick={fetchDashboard}
-            disabled={loading || !selectedFirewallId}
-          >
-            {loading ? '불러오는 중...' : '🔄 새로고침'}
-          </button>
-
-          <label className="checkbox-inline">
-            <input
-              type="checkbox"
-              checked={autoRefresh}
-              onChange={(e) => setAutoRefresh(e.target.checked)}
-            />
-            자동 갱신(5초)
-          </label>
-
-          <select
-            value={selectedFirewallId || ''}
-            onChange={(e) =>
-              setSelectedFirewallId(Number(e.target.value) || null)
-            }
-          >
-            <option value="">방화벽 선택</option>
-            {firewalls.map((fw) => (
-              <option key={fw.id} value={fw.id}>
-                {fw.name}
-              </option>
-            ))}
-          </select>
-
-          <span className="rule-count">
-            현재 대상: {selectedFirewall?.name || '없음'}
-          </span>
-        </div>
-
         {error && <div className="error card">에러: {error}</div>}
 
         {currentPage === 'dashboard' && (
@@ -591,6 +581,12 @@ function App() {
             loading={loading}
             trafficHistory={trafficHistory}
             currentInterfaceStats={currentInterfaceStats}
+            firewalls={firewalls}
+            selectedFirewall={selectedFirewall}
+            selectedFirewallId={selectedFirewallId}
+            onSelectFirewall={handleSelectFirewall}
+            onToggleAutoRefresh={handleToggleAutoRefresh}
+            onRefreshDashboard={fetchDashboard}
           />
         )}
 
@@ -621,7 +617,7 @@ function App() {
           <FirewallManagerPage
             firewalls={firewalls}
             selectedFirewallId={selectedFirewallId}
-            setSelectedFirewallId={setSelectedFirewallId}
+            setSelectedFirewallId={handleSelectFirewall}
             onCreateFirewall={onCreateFirewall}
             onUpdateFirewall={onUpdateFirewall}
             onDeleteFirewall={onDeleteFirewall}
