@@ -6,7 +6,7 @@
     "api_key_enc": "gAAAAABp6ZPrfhBAllz4XZs1Gn4Ap9NS1e5NNu-0fbj_YAYgQik_zTtvz-ffgn7p3v7fXMvpHu7uzgfKLm6v6yuPHf_ksZCj5bf_p49h04xGXy7_rRtk-tk2ijRSXG8X9tVLdEkLCFoYgsOiLuI5Kw9kZqEOn5Isx5ftZHpRgYQx-hMACwifYhAr_Ypq9nC0XidvjTPPshS_",
     "api_secret_enc": "gAAAAABp6ZPrvGVEj5KwTh5JqGZ96W_FTmME81ww2UQ7SMuHnYSlySNOaFO3KTL1o851wMmT3rGX18EnCBVXHiTNcsVtQ-W7tzr22sDJSlnAcO4BgHUiKwKtU7-ejjOPRuT71fvlOlK2nelJXNMcYh7bAKGytPt4IKqKB5Rum7YtC5OqYIY0P_DViJL3s8ab6VVTxDCoFrCW",
     "verify_ssl": false,
-    "log_index": "Suricata_Clean_Logs",
+    "log_index": "suricata-filtered-*",
     "description": "",
     "elastic_url": "https://192.168.0.46:9200",
     "elastic_api_key_enc": "gAAAAABp_AaLM_Mts_npzU5jCWCwYzKW0gY15WqewqQC3Cw6LiEdVA74lVFJXRvrNCRp2VbVXdeEmgNJ4Wq-8TLSHJcqbu330dp4M37ud9O0tgspT8MF5LCdFlw74pU8-yrw1K4PsDkW1dbmBWMTb7JmbKRPkBA-NQ==",
@@ -14,6 +14,6 @@
     "elastic_password_enc": "gAAAAABp_AaLQSs_XiXhUR8TgOdvLwD_hU4nisjU4yOhoy3Ud2l6auyFrdjWaezd2Bmj_hXi9f1i1GUlUdEymmPNfVtuE5EECg==",
     "elastic_verify_ssl": false,
     "created_at": 1776915435,
-    "updated_at": 1778124427
+    "updated_at": 1778650389
   }
 ]
