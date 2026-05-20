@@ -1,3 +1,4 @@
+# train_final.csv로 모델 학습하고 inference_bundle.joblib 저장
 from __future__ import annotations
 
 import argparse
@@ -42,7 +43,7 @@ def main():
     set_seed(train_cfg.get("random_state", 42))
 
     processed = Path(args.processed_dir)
-    train_df = read_csv(processed / "train_final.csv")
+    train_df = read_csv(processed / "train_final_plus_http_params.csv")
     valid_df = read_csv(processed / "valid_final.csv")
 
     norm_cfg = NormalizationConfig(

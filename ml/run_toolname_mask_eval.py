@@ -1,3 +1,4 @@
+# sqlmap, nmap, nikto 같은 도구명 의존성 검사
 from __future__ import annotations
 
 import argparse
