@@ -8,12 +8,12 @@
     "verify_ssl": false,
     "log_index": "suricata-filtered-*",
     "description": "",
-    "elastic_url": "https://192.168.0.46:9200",
+    "elastic_url": "https://192.168.0.2:9200",
     "elastic_api_key_enc": "gAAAAABp_AaLM_Mts_npzU5jCWCwYzKW0gY15WqewqQC3Cw6LiEdVA74lVFJXRvrNCRp2VbVXdeEmgNJ4Wq-8TLSHJcqbu330dp4M37ud9O0tgspT8MF5LCdFlw74pU8-yrw1K4PsDkW1dbmBWMTb7JmbKRPkBA-NQ==",
     "elastic_username": "elastic",
     "elastic_password_enc": "gAAAAABp_AaLQSs_XiXhUR8TgOdvLwD_hU4nisjU4yOhoy3Ud2l6auyFrdjWaezd2Bmj_hXi9f1i1GUlUdEymmPNfVtuE5EECg==",
     "elastic_verify_ssl": false,
     "created_at": 1776915435,
-    "updated_at": 1778650389
+    "updated_at": 1779329187
   }
 ]

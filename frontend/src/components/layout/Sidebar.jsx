@@ -1,3 +1,5 @@
+import { useState } from 'react'
+
 const icons = {
   dashboard: (
     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -14,6 +16,11 @@ const icons = {
       <path d="M12 2 4 5v6c0 5.1 3.4 9.9 8 11 4.6-1.1 8-5.9 8-11V5l-8-3zm0 2.2L18 6.5V11c0 4-2.5 7.7-6 8.8C8.5 18.7 6 15 6 11V6.5l6-2.3zm-1 4.8h2v5h-2V9zm0 6h2v2h-2v-2z" />
     </svg>
   ),
+  opnsenseLogs: (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 3h16v18H4V3zm2 2v3h12V5H6zm0 5v9h12v-9H6zm2 2h8v2H8v-2zm0 4h5v2H8v-2z" />
+    </svg>
+  ),
   firewalls: (
     <svg viewBox="0 0 24 24" aria-hidden="true">
       <path d="M3 4h18v16H3V4zm2 2v3h4V6H5zm6 0v3h4V6h-4zm6 0v3h2V6h-2zM5 11v3h2v-3H5zm4 0v3h4v-3H9zm6 0v3h4v-3h-4zM5 16v2h4v-2H5zm6 0v2h4v-2h-4zm6 0v2h2v-2h-2z" />
@@ -27,13 +34,88 @@ const icons = {
 }
 
 function Sidebar({ currentPage, setCurrentPage }) {
-  const items = [
-    ['dashboard', '대시보드'],
-    ['rules', '룰 관리'],
-    ['eventLogs', '방화벽 이벤트 로그'],
-    ['firewalls', '방화벽 관리'],
-    ['logs', '앱 로그'],
+  const eventPages = ['eventLogs', 'eventLogIndex', 'eventLogSqlSearch']
+  const opnsenseLogPages = ['opnsenseLogOverview', 'opnsenseLogs']
+
+  const [eventMenuOpen, setEventMenuOpen] = useState(
+    eventPages.includes(currentPage),
+  )
+  const [opnsenseMenuOpen, setOpnsenseMenuOpen] = useState(
+    opnsenseLogPages.includes(currentPage),
+  )
+
+  const eventSubItems = [
+    ['eventLogIndex', '로그 인덱싱'],
+    ['eventLogSqlSearch', 'SQL 로그 검색'],
   ]
+
+  const opnsenseSubItems = [
+    ['opnsenseLogOverview', '개요'],
+    ['opnsenseLogs', '실시간 보기'],
+  ]
+
+  const isEventActive = eventPages.includes(currentPage)
+  const isOpnsenseActive = opnsenseLogPages.includes(currentPage)
+
+  const renderMenuGroup = ({
+    keyName,
+    label,
+    active,
+    open,
+    setOpen,
+    mainPage,
+    subItems,
+    icon,
+  }) => (
+    <div className="sidebar-menu-group" key={keyName}>
+      <div
+        className={`sidebar-menu modern-sidebar-menu sidebar-event-row ${
+          active ? 'active' : ''
+        }`}
+      >
+        <button
+          type="button"
+          className="sidebar-event-main"
+          onClick={() => setCurrentPage(mainPage)}
+        >
+          <span className="sidebar-menu-icon">{icon}</span>
+          <span className="sidebar-menu-label">{label}</span>
+        </button>
+
+        <button
+          type="button"
+          className={`sidebar-event-arrow ${open ? 'open' : ''}`}
+          onClick={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            setOpen((prev) => !prev)
+          }}
+          aria-label={`${label} 하위 메뉴 열기`}
+        >
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <path d="M6.2 7.2 10 11l3.8-3.8 1.4 1.4L10 13.8 4.8 8.6l1.4-1.4z" />
+          </svg>
+        </button>
+      </div>
+
+      {open ? (
+        <div className="sidebar-submenu">
+          {subItems.map(([subKey, subLabel]) => (
+            <button
+              key={subKey}
+              type="button"
+              className={`sidebar-submenu-item ${
+                currentPage === subKey ? 'active' : ''
+              }`}
+              onClick={() => setCurrentPage(subKey)}
+            >
+              {subLabel}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
 
   return (
     <aside className="sidebar modern-sidebar">
@@ -46,18 +128,71 @@ function Sidebar({ currentPage, setCurrentPage }) {
       </div>
 
       <nav className="sidebar-nav">
-        {items.map(([key, label]) => (
-          <button
-            key={key}
-            className={`sidebar-menu modern-sidebar-menu ${
-              currentPage === key ? 'active' : ''
-            }`}
-            onClick={() => setCurrentPage(key)}
-          >
-            <span className="sidebar-menu-icon">{icons[key]}</span>
-            <span className="sidebar-menu-label">{label}</span>
-          </button>
-        ))}
+        <button
+          type="button"
+          className={`sidebar-menu modern-sidebar-menu ${
+            currentPage === 'dashboard' ? 'active' : ''
+          }`}
+          onClick={() => setCurrentPage('dashboard')}
+        >
+          <span className="sidebar-menu-icon">{icons.dashboard}</span>
+          <span className="sidebar-menu-label">대시보드</span>
+        </button>
+
+        <button
+          type="button"
+          className={`sidebar-menu modern-sidebar-menu ${
+            currentPage === 'rules' ? 'active' : ''
+          }`}
+          onClick={() => setCurrentPage('rules')}
+        >
+          <span className="sidebar-menu-icon">{icons.rules}</span>
+          <span className="sidebar-menu-label">룰 관리</span>
+        </button>
+
+        {renderMenuGroup({
+          keyName: 'eventLogs',
+          label: '방화벽 이벤트 로그',
+          active: isEventActive,
+          open: eventMenuOpen,
+          setOpen: setEventMenuOpen,
+          mainPage: 'eventLogs',
+          subItems: eventSubItems,
+          icon: icons.eventLogs,
+        })}
+
+        {renderMenuGroup({
+          keyName: 'opnsenseLogs',
+          label: 'OPNsense 로그 파일',
+          active: isOpnsenseActive,
+          open: opnsenseMenuOpen,
+          setOpen: setOpnsenseMenuOpen,
+          mainPage: 'opnsenseLogOverview',
+          subItems: opnsenseSubItems,
+          icon: icons.opnsenseLogs,
+        })}
+
+        <button
+          type="button"
+          className={`sidebar-menu modern-sidebar-menu ${
+            currentPage === 'firewalls' ? 'active' : ''
+          }`}
+          onClick={() => setCurrentPage('firewalls')}
+        >
+          <span className="sidebar-menu-icon">{icons.firewalls}</span>
+          <span className="sidebar-menu-label">방화벽 관리</span>
+        </button>
+
+        <button
+          type="button"
+          className={`sidebar-menu modern-sidebar-menu ${
+            currentPage === 'logs' ? 'active' : ''
+          }`}
+          onClick={() => setCurrentPage('logs')}
+        >
+          <span className="sidebar-menu-icon">{icons.logs}</span>
+          <span className="sidebar-menu-label">앱 로그</span>
+        </button>
       </nav>
     </aside>
   )

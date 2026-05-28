@@ -1,43 +1,26 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
-import {
-  Chart,
-  BarController,
-  BarElement,
-  CategoryScale,
-  LinearScale,
-  Tooltip,
-  Legend,
-} from 'chart.js'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 
-Chart.register(
-  BarController,
-  BarElement,
-  CategoryScale,
-  LinearScale,
-  Tooltip,
-  Legend,
-)
-
-const EMPTY_FILTERS = {
-  size: 200,
-  minutes: 60,
+const DEFAULT_FILTERS = {
+  size: 500,
+  minutes: 0,
   action: '',
   interface: '',
   query: '',
 }
 
-const TIME_OPTIONS = [
-  { label: '전체 시간', value: 0 },
-  { label: '5분', value: 5 },
-  { label: '15분', value: 15 },
-  { label: '1시간', value: 60 },
-  { label: '3시간', value: 180 },
-  { label: '12시간', value: 720 },
-  { label: '24시간', value: 1440 },
+const INDEX_OPTIONS = [
+  { value: 'date', label: '날짜별' },
+  { value: 'hour', label: '시간별' },
+  { value: 'interface', label: '인터페이스별' },
+  { value: 'action', label: 'Action별' },
+  { value: 'protocol', label: '프로토콜별' },
+  { value: 'source_ip', label: '출발지 IP별' },
+  { value: 'destination_ip', label: '목적지 IP별' },
+  { value: 'severity', label: '심각도별' },
+  { value: 'category', label: '카테고리별' },
+  { value: 'host', label: 'Host별' },
 ]
 
-const PAGE_SIZE = 30
-const REFRESH_INTERVAL_MS = 15000
 const EXPAND_ANIMATION_MS = 240
 
 const getNested = (obj, path, fallback = '') => {
@@ -94,52 +77,27 @@ const formatDateTime = (value) => {
   }
 }
 
-const formatTimeOnly = (value) => {
-  if (!value) return '-'
+const getDateKey = (value) => {
+  if (!value || value === '-') return '-'
 
   try {
-    return new Date(value).toLocaleTimeString('ko-KR', {
-      hour12: false,
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    })
+    return new Date(value).toISOString().slice(0, 10)
   } catch {
-    return toDisplayText(value)
+    return '-'
   }
 }
 
-const getBucketSizeMs = (rows) => {
-  if (rows.length <= 1) return 60 * 1000
+const getHourKey = (value) => {
+  if (!value || value === '-') return '-'
 
-  const times = rows
-    .map((row) => new Date(row.timestamp).getTime())
-    .filter((time) => Number.isFinite(time))
-
-  if (times.length <= 1) return 60 * 1000
-
-  const range = Math.max(...times) - Math.min(...times)
-
-  if (range <= 5 * 60 * 1000) return 5 * 1000
-  if (range <= 15 * 60 * 1000) return 15 * 1000
-  if (range <= 60 * 60 * 1000) return 60 * 1000
-  if (range <= 3 * 60 * 60 * 1000) return 5 * 60 * 1000
-  if (range <= 12 * 60 * 60 * 1000) return 15 * 60 * 1000
-  if (range <= 24 * 60 * 60 * 1000) return 30 * 60 * 1000
-
-  return 60 * 60 * 1000
-}
-
-const escapeCsvValue = (value) => {
-  if (value == null) return ''
-
-  const text = String(value).replaceAll('"', '""')
-
-  if (/[",\n\r]/.test(text)) {
-    return `"${text}"`
+  try {
+    const date = new Date(value)
+    const ymd = date.toISOString().slice(0, 10)
+    const hour = String(date.getHours()).padStart(2, '0')
+    return `${ymd} ${hour}:00`
+  } catch {
+    return '-'
   }
-
-  return text
 }
 
 const flattenObject = (obj, prefix = '') => {
@@ -191,164 +149,6 @@ const buildDetailSource = (row) => {
     event_type: row.event_type,
     raw: row.raw,
   }
-}
-
-function EventLogBarChart({ buckets, selectedBucket, onSelectBucket }) {
-  const canvasRef = useRef(null)
-  const chartRef = useRef(null)
-
-  const labels = useMemo(
-    () =>
-      buckets.map((bucket) => {
-        const start = formatTimeOnly(bucket.start)
-        const end = formatTimeOnly(bucket.end)
-        return `${start}~${end}`
-      }),
-    [buckets],
-  )
-
-  const values = useMemo(() => buckets.map((bucket) => bucket.count), [buckets])
-
-  const colors = useMemo(
-    () =>
-      buckets.map((bucket) => {
-        const active =
-          selectedBucket &&
-          selectedBucket.start === bucket.start &&
-          selectedBucket.end === bucket.end
-
-        return active ? '#111827' : '#8470ff'
-      }),
-    [buckets, selectedBucket],
-  )
-
-  useEffect(() => {
-    if (!canvasRef.current || chartRef.current) return
-
-    chartRef.current = new Chart(canvasRef.current, {
-      type: 'bar',
-      data: {
-        labels,
-        datasets: [
-          {
-            label: '로그 수',
-            data: values,
-            backgroundColor: colors,
-            borderRadius: 8,
-            barPercentage: 0.75,
-            categoryPercentage: 0.8,
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        animation: {
-          duration: 650,
-          easing: 'easeOutQuart',
-        },
-        animations: {
-          numbers: {
-            type: 'number',
-            properties: ['y', 'base'],
-            duration: 650,
-            easing: 'easeOutQuart',
-          },
-        },
-        onClick: (_, elements) => {
-          if (!elements.length) return
-          const bucket = buckets[elements[0].index]
-          if (bucket) onSelectBucket(bucket)
-        },
-        interaction: {
-          intersect: false,
-          mode: 'index',
-        },
-        plugins: {
-          legend: {
-            display: false,
-          },
-          tooltip: {
-            backgroundColor: '#111827',
-            titleColor: '#ffffff',
-            bodyColor: '#e5e7eb',
-            padding: 10,
-            callbacks: {
-              title: (items) => {
-                const bucket = buckets[items[0]?.dataIndex]
-                if (!bucket) return '-'
-
-                return `${formatTimeOnly(bucket.start)} ~ ${formatTimeOnly(
-                  bucket.end,
-                )}`
-              },
-              label: (context) => `로그 ${context.raw}건`,
-            },
-          },
-        },
-        scales: {
-          x: {
-            grid: {
-              display: false,
-            },
-            ticks: {
-              color: '#94a3b8',
-              maxRotation: 0,
-              autoSkip: true,
-            },
-          },
-          y: {
-            beginAtZero: true,
-            grid: {
-              color: '#f1f5f9',
-            },
-            ticks: {
-              color: '#94a3b8',
-              precision: 0,
-            },
-          },
-        },
-      },
-    })
-
-    return () => {
-      if (chartRef.current) {
-        chartRef.current.destroy()
-        chartRef.current = null
-      }
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!chartRef.current) return
-
-    const chart = chartRef.current
-
-    chart.data.labels = labels
-    chart.data.datasets[0].data = values
-    chart.data.datasets[0].backgroundColor = colors
-
-    chart.options.onClick = (_, elements) => {
-      if (!elements.length) return
-      const bucket = buckets[elements[0].index]
-      if (bucket) onSelectBucket(bucket)
-    }
-
-    chart.options.plugins.tooltip.callbacks.title = (items) => {
-      const bucket = buckets[items[0]?.dataIndex]
-      if (!bucket) return '-'
-
-      return `${formatTimeOnly(bucket.start)} ~ ${formatTimeOnly(bucket.end)}`
-    }
-
-    chart.update()
-  }, [labels, values, colors, buckets, onSelectBucket])
-
-  return (
-    <div className="event-chart-canvas">
-      <canvas ref={canvasRef} />
-    </div>
-  )
 }
 
 function EventLogDetail({ row, activeTab, setActiveTab }) {
@@ -464,19 +264,16 @@ function EventLogDetail({ row, activeTab, setActiveTab }) {
   )
 }
 
-function FirewallEventLogsPage({ selectedFirewall, fetchEventLogs }) {
-  const [filters, setFilters] = useState(EMPTY_FILTERS)
+function FirewallLogIndexPage({ selectedFirewall, fetchEventLogs }) {
+  const [filters, setFilters] = useState(DEFAULT_FILTERS)
+  const [indexField, setIndexField] = useState('date')
+  const [selectedIndex, setSelectedIndex] = useState('')
   const [rows, setRows] = useState([])
-  const [selectedBucket, setSelectedBucket] = useState(null)
-  const [currentPage, setCurrentPage] = useState(1)
-  const [autoRefresh, setAutoRefresh] = useState(true)
-  const [lastUpdatedAt, setLastUpdatedAt] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [expandedRowId, setExpandedRowId] = useState(null)
   const [closingRowId, setClosingRowId] = useState(null)
   const [detailTab, setDetailTab] = useState('table')
-  const loadingRef = useRef(false)
 
   const selectedName = selectedFirewall?.name || '없음'
 
@@ -505,8 +302,7 @@ function FirewallEventLogsPage({ selectedFirewall, fetchEventLogs }) {
   const handleChange = (e) => {
     const { name, value } = e.target
 
-    setSelectedBucket(null)
-    setCurrentPage(1)
+    setSelectedIndex('')
     closeExpandedImmediately()
 
     setFilters((prev) => ({
@@ -633,9 +429,7 @@ function FirewallEventLogsPage({ selectedFirewall, fetchEventLogs }) {
     return list.map((item, index) => normalizeOneRow(item, index))
   }
 
-  const loadLogs = async ({ silent = false } = {}) => {
-    if (loadingRef.current) return
-
+  const loadLogs = async () => {
     if (!selectedFirewall) {
       setRows([])
       setError('방화벽을 먼저 선택하세요.')
@@ -643,106 +437,48 @@ function FirewallEventLogsPage({ selectedFirewall, fetchEventLogs }) {
     }
 
     try {
-      loadingRef.current = true
-
-      if (!silent) setLoading(true)
-
+      setLoading(true)
       setError('')
 
       const data = await fetchEventLogs(filters)
-      const normalized = normalizeRows(data)
-
-      setRows(normalized)
-      setLastUpdatedAt(new Date())
+      setRows(normalizeRows(data))
     } catch (err) {
       setRows([])
-      setError(err.message || '이벤트 로그를 불러오지 못했습니다.')
+      setError(err.message || '로그를 불러오지 못했습니다.')
     } finally {
-      loadingRef.current = false
-
-      if (!silent) setLoading(false)
+      setLoading(false)
     }
   }
 
   useEffect(() => {
-    if (!selectedFirewall) {
-      setRows([])
-      setError('방화벽을 먼저 선택하세요.')
-      return
-    }
-
-    setSelectedBucket(null)
-    setCurrentPage(1)
-    closeExpandedImmediately()
     loadLogs()
   }, [selectedFirewall])
 
-  useEffect(() => {
-    if (!selectedFirewall || !autoRefresh) return
-
-    const timer = setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        loadLogs({ silent: true })
-      }
-    }, REFRESH_INTERVAL_MS)
-
-    return () => clearInterval(timer)
-  }, [selectedFirewall, autoRefresh, filters])
-
-  const handleSubmit = async (e) => {
-    e.preventDefault()
-    setSelectedBucket(null)
-    setCurrentPage(1)
-    closeExpandedImmediately()
-    await loadLogs()
+  const searchableText = (row) => {
+    return [
+      row.timestamp,
+      row.action,
+      row.interface,
+      row.protocol,
+      row.source_ip,
+      row.source_port,
+      row.destination_ip,
+      row.destination_port,
+      row.rule,
+      row.severity,
+      row.category,
+      row.host,
+      row.event_type,
+    ]
+      .map((value) => toDisplayText(value, ''))
+      .join(' ')
+      .toLowerCase()
   }
 
-  const actionOptions = useMemo(
-    () => [
-      '',
-      'inbound',
-      'outbound',
-      'allowed',
-      'blocked',
-      'drop',
-      'alert',
-      'flow',
-      'dns',
-      'http',
-      'tls',
-    ],
-    [],
-  )
-
-  const interfaceOptions = useMemo(() => {
-    const values = Array.from(
-      new Set(
-        rows
-          .map((row) => row.interface)
-          .filter(Boolean)
-          .filter((x) => x !== '-'),
-      ),
-    )
-
-    return ['', ...values]
-  }, [rows])
-
-  const baseFilteredRows = useMemo(() => {
+  const filteredRows = useMemo(() => {
     const keyword = filters.query.trim().toLowerCase()
-    const now = Date.now()
-    const minutesMs = filters.minutes * 60 * 1000
 
     return rows.filter((row) => {
-      const rowTime = new Date(row.timestamp).getTime()
-
-      if (
-        filters.minutes > 0 &&
-        Number.isFinite(rowTime) &&
-        rowTime < now - minutesMs
-      ) {
-        return false
-      }
-
       if (
         filters.action &&
         row.action !== filters.action &&
@@ -757,166 +493,83 @@ function FirewallEventLogsPage({ selectedFirewall, fetchEventLogs }) {
 
       if (!keyword) return true
 
-      return [
-        row.timestamp,
-        row.action,
-        row.interface,
-        row.protocol,
-        row.source_ip,
-        row.source_port,
-        row.destination_ip,
-        row.destination_port,
-        row.rule,
-        row.severity,
-        row.category,
-        row.host,
-        row.event_type,
-      ]
-        .map((value) => toDisplayText(value, ''))
-        .join(' ')
-        .toLowerCase()
-        .includes(keyword)
+      return searchableText(row).includes(keyword)
     })
   }, [rows, filters])
 
-  const chartBuckets = useMemo(() => {
-    const validRows = baseFilteredRows
-      .map((row) => ({
-        ...row,
-        timeMs: new Date(row.timestamp).getTime(),
-      }))
-      .filter((row) => Number.isFinite(row.timeMs))
+  const getIndexKey = (row) => {
+    if (indexField === 'date') return getDateKey(row.timestamp)
+    if (indexField === 'hour') return getHourKey(row.timestamp)
 
-    if (validRows.length === 0) return []
+    return toDisplayText(row[indexField])
+  }
 
-    const bucketSize = getBucketSizeMs(validRows)
+  const indexedGroups = useMemo(() => {
     const map = new Map()
 
-    validRows.forEach((row) => {
-      const start = Math.floor(row.timeMs / bucketSize) * bucketSize
-      const end = start + bucketSize
-      const key = String(start)
+    filteredRows.forEach((row) => {
+      const key = getIndexKey(row)
 
       if (!map.has(key)) {
         map.set(key, {
-          start,
-          end,
+          key,
           count: 0,
+          rows: [],
         })
       }
 
-      map.get(key).count += 1
+      const group = map.get(key)
+      group.count += 1
+      group.rows.push(row)
     })
 
-    return Array.from(map.values()).sort((a, b) => a.start - b.start)
-  }, [baseFilteredRows])
+    return Array.from(map.values()).sort((a, b) => b.count - a.count)
+  }, [filteredRows, indexField])
 
   const displayedRows = useMemo(() => {
-    if (!selectedBucket) return baseFilteredRows
+    if (!selectedIndex) return filteredRows
 
-    return baseFilteredRows.filter((row) => {
-      const time = new Date(row.timestamp).getTime()
+    const group = indexedGroups.find((item) => item.key === selectedIndex)
 
-      return (
-        Number.isFinite(time) &&
-        time >= selectedBucket.start &&
-        time < selectedBucket.end
-      )
-    })
-  }, [baseFilteredRows, selectedBucket])
+    return group?.rows || []
+  }, [filteredRows, indexedGroups, selectedIndex])
 
-  const totalPages = Math.max(1, Math.ceil(displayedRows.length / PAGE_SIZE))
-
-  const pagedRows = useMemo(() => {
-    const safePage = Math.min(currentPage, totalPages)
-    const start = (safePage - 1) * PAGE_SIZE
-    return displayedRows.slice(start, start + PAGE_SIZE)
-  }, [displayedRows, currentPage, totalPages])
-
-  useEffect(() => {
-    setCurrentPage(1)
-    closeExpandedImmediately()
-  }, [
-    selectedBucket,
-    filters.action,
-    filters.interface,
-    filters.query,
-    filters.minutes,
-  ])
-
-  useEffect(() => {
-    if (currentPage > totalPages) setCurrentPage(totalPages)
-  }, [currentPage, totalPages])
-
-  const selectedBucketLabel = selectedBucket
-    ? `${formatDateTime(selectedBucket.start)} ~ ${formatDateTime(
-        selectedBucket.end,
-      )}`
-    : '전체 구간'
-
-  const exportLogsToCsv = () => {
-    const columns = [
-      ['timestamp', '시간'],
-      ['action', 'Action'],
-      ['interface', '인터페이스'],
-      ['protocol', '프로토콜'],
-      ['source_ip', '출발지 IP'],
-      ['source_port', '출발지 Port'],
-      ['destination_ip', '목적지 IP'],
-      ['destination_port', '목적지 Port'],
-      ['rule', 'Rule'],
-      ['severity', '심각도'],
-      ['category', '카테고리'],
-      ['host', 'Host'],
-    ]
-
-    const csvRows = [
-      columns.map(([, label]) => escapeCsvValue(label)).join(','),
-      ...displayedRows.map((row) =>
-        columns.map(([key]) => escapeCsvValue(row[key])).join(','),
+  const interfaceOptions = useMemo(() => {
+    const values = Array.from(
+      new Set(
+        rows
+          .map((row) => toDisplayText(row.interface))
+          .filter((x) => x && x !== '-'),
       ),
-    ]
+    )
 
-    const blob = new Blob(['\uFEFF' + csvRows.join('\n')], {
-      type: 'text/csv;charset=utf-8;',
-    })
+    return ['', ...values]
+  }, [rows])
 
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    const now = new Date().toISOString().slice(0, 19).replaceAll(':', '-')
+  const actionOptions = useMemo(() => {
+    const values = Array.from(
+      new Set(
+        rows
+          .map((row) => toDisplayText(row.action))
+          .filter((x) => x && x !== '-'),
+      ),
+    )
 
-    link.href = url
-    link.download = `firewall-event-logs-${now}.csv`
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    URL.revokeObjectURL(url)
+    return ['', ...values]
+  }, [rows])
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    setSelectedIndex('')
+    closeExpandedImmediately()
+    await loadLogs()
   }
 
-  const renderInput = ({ label, name, placeholder }) => (
+  const renderSelect = ({ label, name, value, onChange, children }) => (
     <div className="event-input-field">
       <label htmlFor={name}>{label}</label>
-      <input
-        id={name}
-        name={name}
-        value={filters[name]}
-        onChange={handleChange}
-        placeholder={placeholder}
-      />
-    </div>
-  )
-
-  const renderSelect = ({ label, name, children }) => (
-    <div className="event-input-field">
-      <label htmlFor={name}>{label}</label>
-
       <div className="event-select-wrap">
-        <select
-          id={name}
-          name={name}
-          value={filters[name]}
-          onChange={handleChange}
-        >
+        <select id={name} name={name} value={value} onChange={onChange}>
           {children}
         </select>
 
@@ -938,23 +591,29 @@ function FirewallEventLogsPage({ selectedFirewall, fetchEventLogs }) {
       <section className="event-panel">
         <div className="event-panel-header">
           <div>
-            <p className="event-eyebrow">Elastic Event Logs</p>
-            <h2>방화벽 이벤트 로그</h2>
+            <p className="event-eyebrow">Log Indexing</p>
+            <h2>방화벽 로그 인덱싱</h2>
             <span>현재 대상: {selectedName}</span>
           </div>
 
           <div className={`event-status-chip ${loading ? 'loading' : 'ready'}`}>
             <i />
-            {loading ? '로그 갱신 중' : '수집 대기 중'}
+            {loading ? '인덱싱 중' : '대기 중'}
           </div>
         </div>
 
         <form onSubmit={handleSubmit}>
           <div className="event-filter-grid">
             {renderSelect({
-              label: '시간 범위',
-              name: 'minutes',
-              children: TIME_OPTIONS.map((item) => (
+              label: '인덱싱 기준',
+              name: 'indexField',
+              value: indexField,
+              onChange: (e) => {
+                setSelectedIndex('')
+                closeExpandedImmediately()
+                setIndexField(e.target.value)
+              },
+              children: INDEX_OPTIONS.map((item) => (
                 <option key={item.value} value={item.value}>
                   {item.label}
                 </option>
@@ -964,19 +623,23 @@ function FirewallEventLogsPage({ selectedFirewall, fetchEventLogs }) {
             {renderSelect({
               label: '개수',
               name: 'size',
+              value: filters.size,
+              onChange: handleChange,
               children: (
                 <>
-                  <option value={50}>50개</option>
                   <option value={100}>100개</option>
                   <option value={200}>200개</option>
                   <option value={500}>500개</option>
+                  <option value={1000}>1000개</option>
                 </>
               ),
             })}
 
             {renderSelect({
-              label: 'Action',
+              label: 'Action 필터',
               name: 'action',
+              value: filters.action,
+              onChange: handleChange,
               children: actionOptions.map((item) => (
                 <option key={item || 'all'} value={item}>
                   {item || '전체'}
@@ -985,8 +648,10 @@ function FirewallEventLogsPage({ selectedFirewall, fetchEventLogs }) {
             })}
 
             {renderSelect({
-              label: 'Interface',
+              label: 'Interface 필터',
               name: 'interface',
+              value: filters.interface,
+              onChange: handleChange,
               children: interfaceOptions.map((item) => (
                 <option key={item || 'all'} value={item}>
                   {item || '전체'}
@@ -995,34 +660,36 @@ function FirewallEventLogsPage({ selectedFirewall, fetchEventLogs }) {
             })}
 
             <div className="event-search-field">
-              {renderInput({
-                label: '검색',
-                name: 'query',
-                placeholder: 'IP, rule, message, protocol 등',
-              })}
+              <div className="event-input-field">
+                <label htmlFor="query">검색 필터</label>
+                <input
+                  id="query"
+                  name="query"
+                  value={filters.query}
+                  onChange={handleChange}
+                  placeholder="IP, rule, host, category 등"
+                />
+              </div>
             </div>
           </div>
 
           <div className="event-toolbar">
-            <button
-              type="submit"
-              className="event-primary-btn"
-              disabled={loading || !selectedFirewall}
-            >
-              {loading ? '불러오는 중...' : '로그 조회'}
+            <button type="submit" className="event-primary-btn" disabled={loading}>
+              {loading ? '불러오는 중...' : '인덱싱 적용'}
             </button>
 
             <button
               type="button"
-              className={`event-toggle-btn ${autoRefresh ? 'active' : ''}`}
-              onClick={() => setAutoRefresh((prev) => !prev)}
+              className="event-secondary-btn"
+              onClick={() => {
+                setFilters(DEFAULT_FILTERS)
+                setIndexField('date')
+                setSelectedIndex('')
+                closeExpandedImmediately()
+              }}
             >
-              실시간 갱신: {autoRefresh ? 'ON' : 'OFF'}
+              초기화
             </button>
-
-            <span className="event-last-updated">
-              마지막 갱신: {lastUpdatedAt ? formatTimeOnly(lastUpdatedAt) : '-'}
-            </span>
           </div>
         </form>
       </section>
@@ -1030,77 +697,67 @@ function FirewallEventLogsPage({ selectedFirewall, fetchEventLogs }) {
       <section className="event-panel">
         <div className="event-panel-header">
           <div>
-            <p className="event-eyebrow">Timeline</p>
-            <h2>시간별 로그 분포</h2>
-            <span>선택 구간: {selectedBucketLabel}</span>
-          </div>
-
-          <button
-            type="button"
-            className="event-secondary-btn"
-            onClick={() => {
-              setSelectedBucket(null)
-              setCurrentPage(1)
-              closeExpandedImmediately()
-            }}
-            disabled={!selectedBucket}
-          >
-            전체 구간 보기
-          </button>
-        </div>
-
-        {chartBuckets.length === 0 ? (
-          <div className="event-chart-empty">
-            표시할 그래프 데이터가 없습니다.
-          </div>
-        ) : (
-          <>
-            <EventLogBarChart
-              buckets={chartBuckets}
-              selectedBucket={selectedBucket}
-              onSelectBucket={(bucket) => {
-                setSelectedBucket(bucket)
-                setCurrentPage(1)
-                closeExpandedImmediately()
-              }}
-            />
-
-            <div className="event-chart-caption">
-              <span>{formatTimeOnly(chartBuckets[0].start)}</span>
-              <span>막대를 클릭하면 해당 시간 구간의 로그만 조회됩니다.</span>
-              <span>
-                {formatTimeOnly(chartBuckets[chartBuckets.length - 1].end)}
-              </span>
-            </div>
-          </>
-        )}
-      </section>
-
-      <section className="event-panel">
-        <div className="event-panel-header">
-          <div>
-            <p className="event-eyebrow">Events</p>
-            <h2>이벤트 목록</h2>
+            <p className="event-eyebrow">Index Groups</p>
+            <h2>인덱싱 결과</h2>
             <span>
-              총 {displayedRows.length}건 / {currentPage} / {totalPages} 페이지
+              전체 {filteredRows.length}건 / 그룹 {indexedGroups.length}개
             </span>
           </div>
 
           <button
             type="button"
             className="event-secondary-btn"
-            onClick={exportLogsToCsv}
-            disabled={displayedRows.length === 0}
+            disabled={!selectedIndex}
+            onClick={() => {
+              setSelectedIndex('')
+              closeExpandedImmediately()
+            }}
           >
-            CSV 내보내기
+            전체 보기
           </button>
         </div>
 
         {error ? <div className="event-error">{error}</div> : null}
 
+        <div className="log-index-grid">
+          {indexedGroups.length === 0 ? (
+            <div className="event-chart-empty">인덱싱할 로그가 없습니다.</div>
+          ) : (
+            indexedGroups.map((group) => (
+              <button
+                type="button"
+                key={toDisplayText(group.key)}
+                className={`log-index-card ${
+                  selectedIndex === group.key ? 'active' : ''
+                }`}
+                onClick={() => {
+                  setSelectedIndex(group.key)
+                  closeExpandedImmediately()
+                }}
+              >
+                <span>{toDisplayText(group.key)}</span>
+                <strong>{group.count.toLocaleString()}건</strong>
+              </button>
+            ))
+          )}
+        </div>
+      </section>
+
+      <section className="event-panel">
+        <div className="event-panel-header">
+          <div>
+            <p className="event-eyebrow">Indexed Logs</p>
+            <h2>인덱싱 로그 목록</h2>
+            <span>
+              표시 중: {displayedRows.length}건
+              {selectedIndex ? ` / 선택 인덱스: ${toDisplayText(selectedIndex)}` : ''}
+            </span>
+          </div>
+        </div>
+
         <div className="event-table-outer">
           <div className="event-table-inner">
-            <table className="event-table event-log-expand-table">
+            <table className="event-table event-log-expand-table index-log-table">
               <colgroup>
                 <col className="col-expand" />
                 <col className="col-time" />
@@ -1108,9 +765,7 @@ function FirewallEventLogsPage({ selectedFirewall, fetchEventLogs }) {
                 <col className="col-interface" />
                 <col className="col-protocol" />
                 <col className="col-ip" />
-                <col className="col-port" />
                 <col className="col-ip" />
-                <col className="col-port" />
                 <col className="col-rule" />
                 <col className="col-severity" />
                 <col className="col-category" />
@@ -1125,9 +780,7 @@ function FirewallEventLogsPage({ selectedFirewall, fetchEventLogs }) {
                   <th>인터페이스</th>
                   <th>프로토콜</th>
                   <th>출발지 IP</th>
-                  <th>출발지 Port</th>
                   <th>목적지 IP</th>
-                  <th>목적지 Port</th>
                   <th>Rule</th>
                   <th>심각도</th>
                   <th>카테고리</th>
@@ -1136,16 +789,14 @@ function FirewallEventLogsPage({ selectedFirewall, fetchEventLogs }) {
               </thead>
 
               <tbody>
-                {pagedRows.length === 0 ? (
+                {displayedRows.length === 0 ? (
                   <tr>
-                    <td colSpan="13" className="event-empty">
-                      {loading
-                        ? '로그를 불러오는 중입니다.'
-                        : '표시할 로그가 없습니다.'}
+                    <td colSpan="11" className="event-empty">
+                      표시할 로그가 없습니다.
                     </td>
                   </tr>
                 ) : (
-                  pagedRows.map((row, index) => {
+                  displayedRows.slice(0, 100).map((row, index) => {
                     const rowKey = row.id || `${row.timestamp}-${index}`
                     const expanded = expandedRowId === rowKey
                     const closing = closingRowId === rowKey
@@ -1182,13 +833,11 @@ function FirewallEventLogsPage({ selectedFirewall, fetchEventLogs }) {
                           <td className="event-cell-time">
                             {formatDateTime(row.timestamp)}
                           </td>
-
                           <td>
                             <span className="event-action-badge">
                               {toDisplayText(row.action)}
                             </span>
                           </td>
-
                           <td className="event-cell-ellipsis">
                             {toDisplayText(row.interface)}
                           </td>
@@ -1198,14 +847,8 @@ function FirewallEventLogsPage({ selectedFirewall, fetchEventLogs }) {
                           <td className="event-cell-ellipsis">
                             {toDisplayText(row.source_ip)}
                           </td>
-                          <td className="event-cell-center">
-                            {toDisplayText(row.source_port)}
-                          </td>
                           <td className="event-cell-ellipsis">
                             {toDisplayText(row.destination_ip)}
-                          </td>
-                          <td className="event-cell-center">
-                            {toDisplayText(row.destination_port)}
                           </td>
                           <td className="event-cell-rule">
                             {toDisplayText(row.rule)}
@@ -1227,7 +870,7 @@ function FirewallEventLogsPage({ selectedFirewall, fetchEventLogs }) {
                               closing ? 'closing' : 'opening'
                             }`}
                           >
-                            <td colSpan="13">
+                            <td colSpan="11">
                               <EventLogDetail
                                 row={row}
                                 activeTab={detailTab}
@@ -1244,83 +887,8 @@ function FirewallEventLogsPage({ selectedFirewall, fetchEventLogs }) {
             </table>
 
             <div className="event-table-footer">
-              <div className="event-page-info">페이지당 {PAGE_SIZE}개 표시</div>
-
-              <div className="event-pagination">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCurrentPage(1)
-                    closeExpandedImmediately()
-                  }}
-                  disabled={currentPage === 1}
-                >
-                  처음
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCurrentPage((prev) => Math.max(1, prev - 1))
-                    closeExpandedImmediately()
-                  }}
-                  disabled={currentPage === 1}
-                >
-                  이전
-                </button>
-
-                {Array.from({ length: totalPages }, (_, index) => index + 1)
-                  .filter((page) => {
-                    if (totalPages <= 7) return true
-                    if (page === 1 || page === totalPages) return true
-                    return Math.abs(page - currentPage) <= 2
-                  })
-                  .map((page, index, arr) => {
-                    const prevPage = arr[index - 1]
-                    const showEllipsis = prevPage && page - prevPage > 1
-
-                    return (
-                      <span key={page} className="event-page-group">
-                        {showEllipsis ? (
-                          <span className="event-ellipsis">...</span>
-                        ) : null}
-
-                        <button
-                          type="button"
-                          className={currentPage === page ? 'active' : ''}
-                          onClick={() => {
-                            setCurrentPage(page)
-                            closeExpandedImmediately()
-                          }}
-                          disabled={currentPage === page}
-                        >
-                          {page}
-                        </button>
-                      </span>
-                    )
-                  })}
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCurrentPage((prev) => Math.min(totalPages, prev + 1))
-                    closeExpandedImmediately()
-                  }}
-                  disabled={currentPage === totalPages}
-                >
-                  다음
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCurrentPage(totalPages)
-                    closeExpandedImmediately()
-                  }}
-                  disabled={currentPage === totalPages}
-                >
-                  마지막
-                </button>
+              <div className="event-page-info">
+                화면 성능을 위해 최대 100건만 미리보기 표시
               </div>
             </div>
           </div>
@@ -1330,4 +898,4 @@ function FirewallEventLogsPage({ selectedFirewall, fetchEventLogs }) {
   )
 }
 
-export default FirewallEventLogsPage
+export default FirewallLogIndexPage
