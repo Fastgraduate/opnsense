@@ -1,899 +1,370 @@
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import '../styles/logCsvExport.css'
+import {
+  KIBANA_EXPORT_COLUMNS,
+  buildElasticExportRows,
+  downloadCsv,
+  makeTimestampedFilename,
+} from '../utils/logCsvExport'
 
-const DEFAULT_FILTERS = {
-  size: 500,
-  minutes: 0,
-  action: '',
-  interface: '',
-  query: '',
+const toText = (value, fallback = '-') => {
+  if (value === null || value === undefined || value === '') return fallback
+  if (typeof value === 'object') return JSON.stringify(value)
+  return String(value)
 }
 
-const INDEX_OPTIONS = [
-  { value: 'date', label: '날짜별' },
-  { value: 'hour', label: '시간별' },
-  { value: 'interface', label: '인터페이스별' },
-  { value: 'action', label: 'Action별' },
-  { value: 'protocol', label: '프로토콜별' },
-  { value: 'source_ip', label: '출발지 IP별' },
-  { value: 'destination_ip', label: '목적지 IP별' },
-  { value: 'severity', label: '심각도별' },
-  { value: 'category', label: '카테고리별' },
-  { value: 'host', label: 'Host별' },
-]
+const lower = (value) => String(value ?? '').toLowerCase()
 
-const EXPAND_ANIMATION_MS = 240
-
-const getNested = (obj, path, fallback = '') => {
-  if (!obj || !path) return fallback
-
-  const value = path.split('.').reduce((acc, key) => {
-    if (acc && typeof acc === 'object' && key in acc) return acc[key]
-    return undefined
-  }, obj)
-
-  return value ?? fallback
+const includesText = (source, needle) => {
+  if (!needle) return true
+  return lower(source).includes(lower(needle))
 }
 
-const toDisplayText = (value, fallback = '-') => {
-  if (value == null || value === '') return fallback
-
-  if (
-    typeof value === 'string' ||
-    typeof value === 'number' ||
-    typeof value === 'boolean'
-  ) {
-    return String(value)
-  }
-
-  if (Array.isArray(value)) {
-    const text = value
-      .map((item) => toDisplayText(item, ''))
-      .filter(Boolean)
-      .join(', ')
-
-    return text || fallback
-  }
-
-  if (typeof value === 'object') {
-    if (value.name) return String(value.name)
-    if (value.hostname) return String(value.hostname)
-    if (value.ip) return toDisplayText(value.ip, fallback)
-    if (value.address) return String(value.address)
-    if (value.value) return toDisplayText(value.value, fallback)
-
-    return JSON.stringify(value)
-  }
-
-  return fallback
-}
-
-const formatDateTime = (value) => {
-  if (!value || value === '-') return '-'
-
-  try {
-    return new Date(value).toLocaleString('ko-KR', { hour12: false })
-  } catch {
-    return toDisplayText(value)
-  }
-}
-
-const getDateKey = (value) => {
-  if (!value || value === '-') return '-'
-
-  try {
-    return new Date(value).toISOString().slice(0, 10)
-  } catch {
-    return '-'
-  }
-}
-
-const getHourKey = (value) => {
-  if (!value || value === '-') return '-'
-
-  try {
-    const date = new Date(value)
-    const ymd = date.toISOString().slice(0, 10)
-    const hour = String(date.getHours()).padStart(2, '0')
-    return `${ymd} ${hour}:00`
-  } catch {
-    return '-'
-  }
-}
-
-const flattenObject = (obj, prefix = '') => {
-  if (!obj || typeof obj !== 'object') return []
-
-  return Object.entries(obj).flatMap(([key, value]) => {
-    const nextKey = prefix ? `${prefix}.${key}` : key
-
-    if (
-      value &&
-      typeof value === 'object' &&
-      !Array.isArray(value) &&
-      !(value instanceof Date)
-    ) {
-      return flattenObject(value, nextKey)
-    }
-
-    return [
-      {
-        field: nextKey,
-        value,
-      },
-    ]
-  })
-}
-
-const buildDetailSource = (row) => {
-  return {
-    _id: row.elastic_id || row.id,
-    _index: row.elastic_index || '-',
-    _score: row.elastic_score ?? '-',
-    _type: row.elastic_type || '_doc',
-    '@timestamp': row.timestamp,
-    action: row.action,
-    interface: row.interface,
-    protocol: row.protocol,
-    source: {
-      ip: row.source_ip,
-      port: row.source_port,
-    },
-    destination: {
-      ip: row.destination_ip,
-      port: row.destination_port,
-    },
-    rule: row.rule,
-    severity: row.severity,
-    category: row.category,
-    host: row.host,
-    event_type: row.event_type,
-    raw: row.raw,
-  }
-}
-
-function EventLogDetail({ row, activeTab, setActiveTab }) {
-  const [copied, setCopied] = useState(false)
-
-  const detailSource = useMemo(() => buildDetailSource(row), [row])
-  const flattenedRows = useMemo(() => flattenObject(detailSource), [detailSource])
-  const jsonText = useMemo(
-    () => JSON.stringify(detailSource, null, 2),
-    [detailSource],
+const normalizeEventType = (row) => {
+  return (
+    row.event_type ||
+    row.action ||
+    row?.messageJson?.event_type ||
+    row?.raw?.event_type ||
+    '-'
   )
+}
 
-  const handleCopyJson = async () => {
-    try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(jsonText)
-      } else {
-        const textarea = document.createElement('textarea')
-        textarea.value = jsonText
-        document.body.appendChild(textarea)
-        textarea.select()
-        document.execCommand('copy')
-        document.body.removeChild(textarea)
-      }
+const normalizeProtocol = (row) => {
+  return (
+    row.protocol ||
+    row?.messageJson?.proto ||
+    row?.raw?.proto ||
+    row?.raw?.network?.transport ||
+    '-'
+  )
+}
 
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1500)
-    } catch {
-      alert('클립보드 복사에 실패했습니다.')
-    }
+const getRowValue = (row, key) => {
+  if (key === 'event_type') return normalizeEventType(row)
+  if (key === 'protocol') return normalizeProtocol(row)
+  return row?.[key] ?? row?.messageJson?.[key] ?? row?.raw?.[key] ?? '-'
+}
+
+const buildChartRows = (rows, key) => {
+  const map = new Map()
+
+  rows.forEach((row) => {
+    const value = toText(getRowValue(row, key), '')
+    if (!value || value === '-') return
+    map.set(value, (map.get(value) || 0) + 1)
+  })
+
+  const sorted = Array.from(map.entries())
+    .map(([label, count]) => ({ label, count }))
+    .sort((a, b) => b.count - a.count)
+
+  const top = sorted.slice(0, 10)
+  const otherCount = sorted.slice(10).reduce((sum, item) => sum + item.count, 0)
+
+  if (otherCount > 0) top.push({ label: '기타', count: otherCount })
+
+  return top
+}
+
+function BarChart({ rows, classPrefix }) {
+  const max = Math.max(...rows.map((row) => row.count), 1)
+
+  if (!rows.length) {
+    return (
+      <div className={`${classPrefix}-chart-empty`}>
+        차트로 표시할 데이터가 없습니다.
+      </div>
+    )
   }
 
   return (
-    <div className="event-expanded-document">
-      <div className="event-expanded-title-row">
-        <div>
-          <div className="event-expanded-title">
-            <span className="event-expanded-folder">▱</span>
-            Expanded document
+    <div className={`${classPrefix}-bar-chart`}>
+      {rows.map((row, index) => {
+        const percent = Math.max((row.count / max) * 100, 3)
+
+        return (
+          <div key={`${row.label}-${index}`} className={`${classPrefix}-bar-row`}>
+            <div className={`${classPrefix}-bar-label`} title={row.label}>
+              {row.label}
+            </div>
+            <div className={`${classPrefix}-bar-track`}>
+              <div
+                className={`${classPrefix}-bar-fill`}
+                style={{ width: `${percent}%` }}
+              />
+            </div>
+            <div className={`${classPrefix}-bar-count`}>
+              {row.count.toLocaleString()}건
+            </div>
           </div>
-          <div className="event-expanded-subtitle">
-            {toDisplayText(row.elastic_index || row.id)}
-          </div>
-        </div>
-      </div>
-
-      <div className="event-detail-tabs">
-        <button
-          type="button"
-          className={activeTab === 'table' ? 'active' : ''}
-          onClick={() => setActiveTab('table')}
-        >
-          Table
-        </button>
-
-        <button
-          type="button"
-          className={activeTab === 'json' ? 'active' : ''}
-          onClick={() => setActiveTab('json')}
-        >
-          JSON
-        </button>
-      </div>
-
-      {activeTab === 'table' ? (
-        <div className="event-detail-table-wrap">
-          <table className="event-detail-table">
-            <thead>
-              <tr>
-                <th>Actions</th>
-                <th>Field</th>
-                <th>Value</th>
-              </tr>
-            </thead>
-
-            <tbody>
-              {flattenedRows.map((item) => (
-                <tr key={item.field}>
-                  <td>
-                    <span className="event-field-action-dot">t</span>
-                  </td>
-                  <td>
-                    <span className="event-field-name">{item.field}</span>
-                  </td>
-                  <td>
-                    <span className="event-field-value">
-                      {toDisplayText(item.value)}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        <div className="event-json-panel">
-          <div className="event-json-toolbar">
-            <span>Raw JSON</span>
-
-            <button
-              type="button"
-              className="event-copy-json-btn"
-              onClick={handleCopyJson}
-            >
-              {copied ? '복사 완료' : 'JSON 복사'}
-            </button>
-          </div>
-
-          <pre>{jsonText}</pre>
-        </div>
-      )}
+        )
+      })}
     </div>
   )
 }
 
+function LogDetailModal({ log, onClose, title = '로그 상세' }) {
+  if (!log) return null
+
+  return (
+    <div className="event-log-modal-backdrop" onClick={onClose}>
+      <div className="event-log-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="event-log-modal-header">
+          <div>
+            <p className="event-log-eyebrow">Log Detail</p>
+            <h3>{title}</h3>
+          </div>
+          <button type="button" onClick={onClose}>닫기</button>
+        </div>
+
+        <div className="event-log-modal-summary">
+          <span>시간: {toText(log.timestamp)}</span>
+          <span>이벤트: {toText(normalizeEventType(log))}</span>
+          <span>인터페이스: {toText(log.interface)}</span>
+          <span>출발지: {toText(log.source_ip)}:{toText(log.source_port, '')}</span>
+          <span>목적지: {toText(log.destination_ip)}:{toText(log.destination_port, '')}</span>
+        </div>
+
+        <pre className="event-log-modal-pre">
+          {JSON.stringify(log.raw || log, null, 2)}
+        </pre>
+      </div>
+    </div>
+  )
+}
+
+const DEFAULT_FILTERS = {
+  minutes: 1440,
+  size: 300,
+  action: '',
+  interface: '',
+  query: '',
+  eventType: '',
+  protocol: '',
+}
+
+const PRESETS = [
+  {
+    key: 'recent',
+    label: '최근 24시간',
+    description: '최근 24시간 로그 인덱싱',
+    filters: { minutes: 1440, size: 300, action: '', interface: '', query: '', eventType: '', protocol: '' },
+  },
+  {
+    key: 'alert',
+    label: 'Alert 인덱스',
+    description: 'Alert 이벤트만 집계',
+    filters: { minutes: 1440, size: 300, action: 'alert', eventType: 'alert', query: '' },
+  },
+  {
+    key: 'flow',
+    label: 'Flow 인덱스',
+    description: 'Flow 이벤트만 집계',
+    filters: { minutes: 360, size: 300, action: 'flow', eventType: 'flow', query: '' },
+  },
+  {
+    key: 'dns',
+    label: 'DNS',
+    description: 'DNS 관련 이벤트',
+    filters: { minutes: 1440, size: 300, action: '', eventType: 'dns', query: 'dns' },
+  },
+  {
+    key: 'http',
+    label: 'HTTP',
+    description: 'HTTP 관련 이벤트',
+    filters: { minutes: 1440, size: 300, action: '', eventType: 'http', query: 'http' },
+  },
+  {
+    key: 'important',
+    label: '중요 로그',
+    description: 'alert/drop/block/deny 중심',
+    filters: { minutes: 1440, size: 300, action: '', eventType: '', query: 'alert drop block deny' },
+  },
+]
+
+const CHART_OPTIONS = [
+  { key: 'event_type', label: '이벤트 타입' },
+  { key: 'interface', label: '인터페이스' },
+  { key: 'protocol', label: '프로토콜' },
+  { key: 'severity', label: '심각도' },
+  { key: 'category', label: '카테고리' },
+  { key: 'source_ip', label: '출발지 IP' },
+  { key: 'destination_ip', label: '목적지 IP' },
+]
+
 function FirewallLogIndexPage({ selectedFirewall, fetchEventLogs }) {
   const [filters, setFilters] = useState(DEFAULT_FILTERS)
-  const [indexField, setIndexField] = useState('date')
-  const [selectedIndex, setSelectedIndex] = useState('')
-  const [rows, setRows] = useState([])
+  const [activePreset, setActivePreset] = useState('recent')
+  const [chartKey, setChartKey] = useState('event_type')
+  const [logs, setLogs] = useState([])
+  const [exportColumns, setExportColumns] = useState(KIBANA_EXPORT_COLUMNS)
+  const [selectedLog, setSelectedLog] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [expandedRowId, setExpandedRowId] = useState(null)
-  const [closingRowId, setClosingRowId] = useState(null)
-  const [detailTab, setDetailTab] = useState('table')
+  const loadingRef = useRef(false)
 
   const selectedName = selectedFirewall?.name || '없음'
 
-  const closeExpandedImmediately = () => {
-    setExpandedRowId(null)
-    setClosingRowId(null)
-  }
+  const filteredLogs = useMemo(() => {
+    return logs.filter((log) => {
+      if (filters.eventType && !includesText(normalizeEventType(log), filters.eventType)) return false
+      if (filters.protocol && !includesText(normalizeProtocol(log), filters.protocol)) return false
+      return true
+    })
+  }, [logs, filters.eventType, filters.protocol])
 
-  const handleToggleExpandedRow = (rowKey) => {
-    if (expandedRowId === rowKey) {
-      setExpandedRowId(null)
-      setClosingRowId(rowKey)
+  const chartRows = useMemo(() => buildChartRows(filteredLogs, chartKey), [filteredLogs, chartKey])
 
-      window.setTimeout(() => {
-        setClosingRowId((prev) => (prev === rowKey ? null : prev))
-      }, EXPAND_ANIMATION_MS)
+  const indexRows = useMemo(() => {
+    const byType = buildChartRows(filteredLogs, 'event_type')
+    const byInterface = buildChartRows(filteredLogs, 'interface')
+    const byProtocol = buildChartRows(filteredLogs, 'protocol')
 
-      return
-    }
+    return [
+      ...byType.map((row) => ({ group: '이벤트 타입', ...row })),
+      ...byInterface.map((row) => ({ group: '인터페이스', ...row })),
+      ...byProtocol.map((row) => ({ group: '프로토콜', ...row })),
+    ]
+  }, [filteredLogs])
 
-    setClosingRowId(null)
-    setExpandedRowId(rowKey)
-    setDetailTab('table')
-  }
+  const stats = useMemo(() => {
+    const total = filteredLogs.length
+    const alert = filteredLogs.filter((row) => lower(normalizeEventType(row)) === 'alert').length
+    const flow = filteredLogs.filter((row) => lower(normalizeEventType(row)) === 'flow').length
+    const uniqueIndex = new Set(filteredLogs.map((row) => row?.exportRow?._index || row?.raw?._index || row?.raw?.['_index']).filter(Boolean)).size
+    return { total, alert, flow, uniqueIndex }
+  }, [filteredLogs])
 
   const handleChange = (e) => {
     const { name, value } = e.target
-
-    setSelectedIndex('')
-    closeExpandedImmediately()
-
-    setFilters((prev) => ({
-      ...prev,
-      [name]: name === 'size' || name === 'minutes' ? Number(value) : value,
-    }))
+    setActivePreset('custom')
+    setFilters((prev) => ({ ...prev, [name]: value }))
   }
 
-  const normalizeOneRow = (item, index) => {
-    const src = item?._source || item?.raw || item || {}
-
-    const eventType =
-      toDisplayText(getNested(src, 'suricata.eve.event_type'), '') ||
-      toDisplayText(getNested(src, 'event.type'), '') ||
-      toDisplayText(src.event_type, '') ||
-      '-'
-
-    const action =
-      toDisplayText(item.action, '') ||
-      toDisplayText(src.action, '') ||
-      toDisplayText(getNested(src, 'network.direction'), '') ||
-      eventType ||
-      '-'
-
-    const rule =
-      toDisplayText(item.rule, '') ||
-      toDisplayText(src.rule, '') ||
-      toDisplayText(getNested(src, 'suricata.eve.alert.signature'), '') ||
-      toDisplayText(getNested(src, 'rule.name'), '') ||
-      eventType ||
-      '-'
-
-    const category =
-      toDisplayText(item.category, '') ||
-      toDisplayText(src.category, '') ||
-      toDisplayText(getNested(src, 'suricata.eve.alert.category'), '') ||
-      toDisplayText(getNested(src, 'event.category'), '') ||
-      toDisplayText(getNested(src, 'event.dataset'), '') ||
-      '-'
-
-    const severity =
-      toDisplayText(item.severity, '') ||
-      toDisplayText(src.severity, '') ||
-      toDisplayText(getNested(src, 'suricata.eve.alert.severity'), '') ||
-      toDisplayText(getNested(src, 'event.severity'), '') ||
-      '-'
-
-    const host =
-      toDisplayText(item.host_name, '') ||
-      toDisplayText(item.hostname, '') ||
-      toDisplayText(getNested(src, 'host.name'), '') ||
-      toDisplayText(getNested(src, 'host.hostname'), '') ||
-      toDisplayText(getNested(src, 'host.ip'), '') ||
-      toDisplayText(src.host, '')
-
-    return {
-      id: toDisplayText(
-        item.id || item._id || `${src['@timestamp'] || 'log'}-${index}`,
-      ),
-      elastic_id: item._id || item.id || '-',
-      elastic_index: item._index || '-',
-      elastic_score: item._score ?? '-',
-      elastic_type: item._type || '_doc',
-      timestamp: toDisplayText(item.timestamp || src['@timestamp']),
-      action,
-      interface:
-        toDisplayText(item.interface, '') ||
-        toDisplayText(src.interface, '') ||
-        toDisplayText(getNested(src, 'suricata.eve.in_iface'), '') ||
-        '-',
-      protocol:
-        toDisplayText(item.protocol, '') ||
-        toDisplayText(src.protocol, '') ||
-        toDisplayText(getNested(src, 'network.transport'), '') ||
-        toDisplayText(src.proto, '') ||
-        '-',
-      source_ip:
-        toDisplayText(item.source_ip, '') ||
-        toDisplayText(item.src_ip, '') ||
-        toDisplayText(src.source_ip, '') ||
-        toDisplayText(src.src_ip, '') ||
-        toDisplayText(getNested(src, 'source.ip'), '') ||
-        '-',
-      source_port:
-        toDisplayText(item.source_port, '') ||
-        toDisplayText(item.src_port, '') ||
-        toDisplayText(src.source_port, '') ||
-        toDisplayText(src.src_port, '') ||
-        toDisplayText(getNested(src, 'source.port'), '') ||
-        '-',
-      destination_ip:
-        toDisplayText(item.destination_ip, '') ||
-        toDisplayText(item.dest_ip, '') ||
-        toDisplayText(src.destination_ip, '') ||
-        toDisplayText(src.dest_ip, '') ||
-        toDisplayText(getNested(src, 'destination.ip'), '') ||
-        '-',
-      destination_port:
-        toDisplayText(item.destination_port, '') ||
-        toDisplayText(item.dest_port, '') ||
-        toDisplayText(src.destination_port, '') ||
-        toDisplayText(src.dest_port, '') ||
-        toDisplayText(getNested(src, 'destination.port'), '') ||
-        '-',
-      rule,
-      severity,
-      category,
-      host: host || '-',
-      event_type: eventType,
-      raw: src,
-    }
+  const applyPreset = (preset) => {
+    setActivePreset(preset.key)
+    setFilters((prev) => ({ ...prev, ...preset.filters }))
   }
 
-  const normalizeRows = (payload) => {
-    let list = []
-
-    if (Array.isArray(payload?.rows)) list = payload.rows
-    else if (Array.isArray(payload?.data?.rows)) list = payload.data.rows
-    else if (Array.isArray(payload?.hits?.hits)) list = payload.hits.hits
-    else if (Array.isArray(payload?.data?.hits?.hits))
-      list = payload.data.hits.hits
-    else if (Array.isArray(payload)) list = payload
-
-    return list.map((item, index) => normalizeOneRow(item, index))
+  const resetFilters = () => {
+    setActivePreset('recent')
+    setFilters(DEFAULT_FILTERS)
   }
 
   const loadLogs = async () => {
-    if (!selectedFirewall) {
-      setRows([])
-      setError('방화벽을 먼저 선택하세요.')
-      return
-    }
+    if (!selectedFirewall || loadingRef.current) return
 
     try {
+      loadingRef.current = true
       setLoading(true)
       setError('')
 
-      const data = await fetchEventLogs(filters)
-      setRows(normalizeRows(data))
+      const data = await fetchEventLogs({
+        size: Math.min(Number(filters.size) || 300, 300),
+        minutes: Number(filters.minutes) || 1440,
+        action: filters.action,
+        interface: filters.interface,
+        query: filters.query,
+      })
+
+      setLogs(Array.isArray(data?.rows) ? data.rows : [])
+      setExportColumns(Array.isArray(data?.exportColumns) && data.exportColumns.length > 0 ? data.exportColumns : KIBANA_EXPORT_COLUMNS)
     } catch (err) {
-      setRows([])
-      setError(err.message || '로그를 불러오지 못했습니다.')
+      setLogs([])
+      setError(err.message || '로그 인덱싱 조회 실패')
     } finally {
+      loadingRef.current = false
       setLoading(false)
     }
   }
 
+  const handleExportCsv = () => {
+    downloadCsv(makeTimestampedFilename('kibana_index_logs'), exportColumns, buildElasticExportRows(filteredLogs))
+  }
+
   useEffect(() => {
     loadLogs()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedFirewall])
 
-  const searchableText = (row) => {
-    return [
-      row.timestamp,
-      row.action,
-      row.interface,
-      row.protocol,
-      row.source_ip,
-      row.source_port,
-      row.destination_ip,
-      row.destination_port,
-      row.rule,
-      row.severity,
-      row.category,
-      row.host,
-      row.event_type,
-    ]
-      .map((value) => toDisplayText(value, ''))
-      .join(' ')
-      .toLowerCase()
-  }
-
-  const filteredRows = useMemo(() => {
-    const keyword = filters.query.trim().toLowerCase()
-
-    return rows.filter((row) => {
-      if (
-        filters.action &&
-        row.action !== filters.action &&
-        row.event_type !== filters.action
-      ) {
-        return false
-      }
-
-      if (filters.interface && row.interface !== filters.interface) {
-        return false
-      }
-
-      if (!keyword) return true
-
-      return searchableText(row).includes(keyword)
-    })
-  }, [rows, filters])
-
-  const getIndexKey = (row) => {
-    if (indexField === 'date') return getDateKey(row.timestamp)
-    if (indexField === 'hour') return getHourKey(row.timestamp)
-
-    return toDisplayText(row[indexField])
-  }
-
-  const indexedGroups = useMemo(() => {
-    const map = new Map()
-
-    filteredRows.forEach((row) => {
-      const key = getIndexKey(row)
-
-      if (!map.has(key)) {
-        map.set(key, {
-          key,
-          count: 0,
-          rows: [],
-        })
-      }
-
-      const group = map.get(key)
-      group.count += 1
-      group.rows.push(row)
-    })
-
-    return Array.from(map.values()).sort((a, b) => b.count - a.count)
-  }, [filteredRows, indexField])
-
-  const displayedRows = useMemo(() => {
-    if (!selectedIndex) return filteredRows
-
-    const group = indexedGroups.find((item) => item.key === selectedIndex)
-
-    return group?.rows || []
-  }, [filteredRows, indexedGroups, selectedIndex])
-
-  const interfaceOptions = useMemo(() => {
-    const values = Array.from(
-      new Set(
-        rows
-          .map((row) => toDisplayText(row.interface))
-          .filter((x) => x && x !== '-'),
-      ),
-    )
-
-    return ['', ...values]
-  }, [rows])
-
-  const actionOptions = useMemo(() => {
-    const values = Array.from(
-      new Set(
-        rows
-          .map((row) => toDisplayText(row.action))
-          .filter((x) => x && x !== '-'),
-      ),
-    )
-
-    return ['', ...values]
-  }, [rows])
-
-  const handleSubmit = async (e) => {
-    e.preventDefault()
-    setSelectedIndex('')
-    closeExpandedImmediately()
-    await loadLogs()
-  }
-
-  const renderSelect = ({ label, name, value, onChange, children }) => (
-    <div className="event-input-field">
-      <label htmlFor={name}>{label}</label>
-      <div className="event-select-wrap">
-        <select id={name} name={name} value={value} onChange={onChange}>
-          {children}
-        </select>
-
-        <span className="event-select-icon">
-          <svg viewBox="0 0 20 20" aria-hidden="true">
-            <path
-              fillRule="evenodd"
-              d="M10 3a1 1 0 01.707.293l3 3a1 1 0 01-1.414 1.414L10 5.414 7.707 7.707a1 1 0 01-1.414-1.414l3-3A1 1 0 0110 3zm-3.707 9.293a1 1 0 011.414 0L10 14.586l2.293-2.293a1 1 0 011.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z"
-              clipRule="evenodd"
-            />
-          </svg>
-        </span>
-      </div>
-    </div>
-  )
-
   return (
-    <div className="event-logs-page">
-      <section className="event-panel">
-        <div className="event-panel-header">
-          <div>
-            <p className="event-eyebrow">Log Indexing</p>
-            <h2>방화벽 로그 인덱싱</h2>
-            <span>현재 대상: {selectedName}</span>
-          </div>
-
-          <div className={`event-status-chip ${loading ? 'loading' : 'ready'}`}>
-            <i />
-            {loading ? '인덱싱 중' : '대기 중'}
-          </div>
+    <div className="log-index-page">
+      <section className="log-index-header log-index-card">
+        <div>
+          <p className="log-index-eyebrow">Elastic Log Index</p>
+          <h2>로그 인덱싱</h2>
+          <span>현재 대상: {selectedName}</span>
         </div>
+        <div className="log-index-actions">
+          <button type="button" onClick={loadLogs} disabled={loading}>{loading ? '조회 중...' : '조회'}</button>
+          <button type="button" className="csv" onClick={handleExportCsv} disabled={filteredLogs.length === 0}>CSV 내보내기</button>
+        </div>
+      </section>
 
-        <form onSubmit={handleSubmit}>
-          <div className="event-filter-grid">
-            {renderSelect({
-              label: '인덱싱 기준',
-              name: 'indexField',
-              value: indexField,
-              onChange: (e) => {
-                setSelectedIndex('')
-                closeExpandedImmediately()
-                setIndexField(e.target.value)
-              },
-              children: INDEX_OPTIONS.map((item) => (
-                <option key={item.value} value={item.value}>
-                  {item.label}
-                </option>
-              )),
-            })}
+      {error ? <div className="log-index-error">에러: {error}</div> : null}
 
-            {renderSelect({
-              label: '개수',
-              name: 'size',
-              value: filters.size,
-              onChange: handleChange,
-              children: (
-                <>
-                  <option value={100}>100개</option>
-                  <option value={200}>200개</option>
-                  <option value={500}>500개</option>
-                  <option value={1000}>1000개</option>
-                </>
-              ),
-            })}
-
-            {renderSelect({
-              label: 'Action 필터',
-              name: 'action',
-              value: filters.action,
-              onChange: handleChange,
-              children: actionOptions.map((item) => (
-                <option key={item || 'all'} value={item}>
-                  {item || '전체'}
-                </option>
-              )),
-            })}
-
-            {renderSelect({
-              label: 'Interface 필터',
-              name: 'interface',
-              value: filters.interface,
-              onChange: handleChange,
-              children: interfaceOptions.map((item) => (
-                <option key={item || 'all'} value={item}>
-                  {item || '전체'}
-                </option>
-              )),
-            })}
-
-            <div className="event-search-field">
-              <div className="event-input-field">
-                <label htmlFor="query">검색 필터</label>
-                <input
-                  id="query"
-                  name="query"
-                  value={filters.query}
-                  onChange={handleChange}
-                  placeholder="IP, rule, host, category 등"
-                />
-              </div>
-            </div>
-          </div>
-
-          <div className="event-toolbar">
-            <button type="submit" className="event-primary-btn" disabled={loading}>
-              {loading ? '불러오는 중...' : '인덱싱 적용'}
+      <section className="log-index-card">
+        <div className="log-index-section-title">
+          <div><p>Presets</p><h3>프리셋</h3></div>
+          <button type="button" onClick={resetFilters}>초기화</button>
+        </div>
+        <div className="log-index-preset-grid">
+          {PRESETS.map((preset) => (
+            <button key={preset.key} type="button" className={activePreset === preset.key ? 'active' : ''} onClick={() => applyPreset(preset)}>
+              <strong>{preset.label}</strong>
+              <span>{preset.description}</span>
             </button>
-
-            <button
-              type="button"
-              className="event-secondary-btn"
-              onClick={() => {
-                setFilters(DEFAULT_FILTERS)
-                setIndexField('date')
-                setSelectedIndex('')
-                closeExpandedImmediately()
-              }}
-            >
-              초기화
-            </button>
-          </div>
-        </form>
-      </section>
-
-      <section className="event-panel">
-        <div className="event-panel-header">
-          <div>
-            <p className="event-eyebrow">Index Groups</p>
-            <h2>인덱싱 결과</h2>
-            <span>
-              전체 {filteredRows.length}건 / 그룹 {indexedGroups.length}개
-            </span>
-          </div>
-
-          <button
-            type="button"
-            className="event-secondary-btn"
-            disabled={!selectedIndex}
-            onClick={() => {
-              setSelectedIndex('')
-              closeExpandedImmediately()
-            }}
-          >
-            전체 보기
-          </button>
-        </div>
-
-        {error ? <div className="event-error">{error}</div> : null}
-
-        <div className="log-index-grid">
-          {indexedGroups.length === 0 ? (
-            <div className="event-chart-empty">인덱싱할 로그가 없습니다.</div>
-          ) : (
-            indexedGroups.map((group) => (
-              <button
-                type="button"
-                key={toDisplayText(group.key)}
-                className={`log-index-card ${
-                  selectedIndex === group.key ? 'active' : ''
-                }`}
-                onClick={() => {
-                  setSelectedIndex(group.key)
-                  closeExpandedImmediately()
-                }}
-              >
-                <span>{toDisplayText(group.key)}</span>
-                <strong>{group.count.toLocaleString()}건</strong>
-              </button>
-            ))
-          )}
+          ))}
         </div>
       </section>
 
-      <section className="event-panel">
-        <div className="event-panel-header">
-          <div>
-            <p className="event-eyebrow">Indexed Logs</p>
-            <h2>인덱싱 로그 목록</h2>
-            <span>
-              표시 중: {displayedRows.length}건
-              {selectedIndex ? ` / 선택 인덱스: ${toDisplayText(selectedIndex)}` : ''}
-            </span>
-          </div>
-        </div>
-
-        <div className="event-table-outer">
-          <div className="event-table-inner">
-            <table className="event-table event-log-expand-table index-log-table">
-              <colgroup>
-                <col className="col-expand" />
-                <col className="col-time" />
-                <col className="col-action" />
-                <col className="col-interface" />
-                <col className="col-protocol" />
-                <col className="col-ip" />
-                <col className="col-ip" />
-                <col className="col-rule" />
-                <col className="col-severity" />
-                <col className="col-category" />
-                <col className="col-host" />
-              </colgroup>
-
-              <thead>
-                <tr>
-                  <th className="event-expand-th"></th>
-                  <th>시간</th>
-                  <th>Action</th>
-                  <th>인터페이스</th>
-                  <th>프로토콜</th>
-                  <th>출발지 IP</th>
-                  <th>목적지 IP</th>
-                  <th>Rule</th>
-                  <th>심각도</th>
-                  <th>카테고리</th>
-                  <th>Host</th>
-                </tr>
-              </thead>
-
-              <tbody>
-                {displayedRows.length === 0 ? (
-                  <tr>
-                    <td colSpan="11" className="event-empty">
-                      표시할 로그가 없습니다.
-                    </td>
-                  </tr>
-                ) : (
-                  displayedRows.slice(0, 100).map((row, index) => {
-                    const rowKey = row.id || `${row.timestamp}-${index}`
-                    const expanded = expandedRowId === rowKey
-                    const closing = closingRowId === rowKey
-                    const showDetail = expanded || closing
-
-                    return (
-                      <Fragment key={rowKey}>
-                        <tr
-                          className={`event-clickable-row ${
-                            expanded ? 'expanded' : ''
-                          }`}
-                          onClick={() => handleToggleExpandedRow(rowKey)}
-                        >
-                          <td className="event-expand-cell">
-                            <button
-                              type="button"
-                              className={`event-row-arrow ${
-                                expanded ? 'open' : ''
-                              }`}
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                handleToggleExpandedRow(rowKey)
-                              }}
-                              aria-label={
-                                expanded ? '로그 상세 접기' : '로그 상세 펼치기'
-                              }
-                            >
-                              <svg viewBox="0 0 20 20" aria-hidden="true">
-                                <path d="M7.2 4.8 12.4 10l-5.2 5.2 1.4 1.4L15.2 10 8.6 3.4 7.2 4.8z" />
-                              </svg>
-                            </button>
-                          </td>
-
-                          <td className="event-cell-time">
-                            {formatDateTime(row.timestamp)}
-                          </td>
-                          <td>
-                            <span className="event-action-badge">
-                              {toDisplayText(row.action)}
-                            </span>
-                          </td>
-                          <td className="event-cell-ellipsis">
-                            {toDisplayText(row.interface)}
-                          </td>
-                          <td className="event-cell-center">
-                            {toDisplayText(row.protocol)}
-                          </td>
-                          <td className="event-cell-ellipsis">
-                            {toDisplayText(row.source_ip)}
-                          </td>
-                          <td className="event-cell-ellipsis">
-                            {toDisplayText(row.destination_ip)}
-                          </td>
-                          <td className="event-cell-rule">
-                            {toDisplayText(row.rule)}
-                          </td>
-                          <td className="event-cell-center">
-                            {toDisplayText(row.severity)}
-                          </td>
-                          <td className="event-cell-ellipsis">
-                            {toDisplayText(row.category)}
-                          </td>
-                          <td className="event-cell-ellipsis">
-                            {toDisplayText(row.host)}
-                          </td>
-                        </tr>
-
-                        {showDetail ? (
-                          <tr
-                            className={`event-expanded-row ${
-                              closing ? 'closing' : 'opening'
-                            }`}
-                          >
-                            <td colSpan="11">
-                              <EventLogDetail
-                                row={row}
-                                activeTab={detailTab}
-                                setActiveTab={setDetailTab}
-                              />
-                            </td>
-                          </tr>
-                        ) : null}
-                      </Fragment>
-                    )
-                  })
-                )}
-              </tbody>
-            </table>
-
-            <div className="event-table-footer">
-              <div className="event-page-info">
-                화면 성능을 위해 최대 100건만 미리보기 표시
-              </div>
-            </div>
-          </div>
+      <section className="log-index-filter-card log-index-card">
+        <div className="log-index-section-title"><div><p>Filters</p><h3>필터</h3></div></div>
+        <div className="log-index-filter-grid expanded">
+          <label>조회 범위<select name="minutes" value={filters.minutes} onChange={handleChange}><option value="60">최근 1시간</option><option value="360">최근 6시간</option><option value="1440">최근 24시간</option></select></label>
+          <label>조회 개수<select name="size" value={filters.size} onChange={handleChange}><option value="100">100개</option><option value="200">200개</option><option value="300">300개</option></select></label>
+          <label>서버 Action/Event<input name="action" value={filters.action} onChange={handleChange} placeholder="alert, flow..." /></label>
+          <label>서버 Interface<input name="interface" value={filters.interface} onChange={handleChange} placeholder="ens33..." /></label>
+          <label>서버 검색어<input name="query" value={filters.query} onChange={handleChange} onKeyDown={(e) => { if (e.key === 'Enter') loadLogs() }} /></label>
+          <label>이벤트 타입<input name="eventType" value={filters.eventType} onChange={handleChange} /></label>
+          <label>프로토콜<input name="protocol" value={filters.protocol} onChange={handleChange} /></label>
         </div>
       </section>
+
+      <section className="log-index-stats-grid">
+        <article className="log-index-stat-card"><span>총 로그</span><strong>{stats.total.toLocaleString()}</strong></article>
+        <article className="log-index-stat-card"><span>Alert</span><strong>{stats.alert.toLocaleString()}</strong></article>
+        <article className="log-index-stat-card"><span>Flow</span><strong>{stats.flow.toLocaleString()}</strong></article>
+        <article className="log-index-stat-card"><span>Index</span><strong>{stats.uniqueIndex.toLocaleString()}</strong></article>
+      </section>
+
+      <section className="log-index-card">
+        <div className="log-index-section-title">
+          <div><p>Bar Chart</p><h3>인덱싱 분포</h3></div>
+          <select value={chartKey} onChange={(e) => setChartKey(e.target.value)}>{CHART_OPTIONS.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</select>
+        </div>
+        <BarChart rows={chartRows} classPrefix="log-index" />
+      </section>
+
+      <section className="log-index-card">
+        <div className="log-index-section-title">
+          <div><p>Index Table</p><h3>인덱싱 요약</h3></div>
+          <span className="log-index-count">{indexRows.length.toLocaleString()}개 항목</span>
+        </div>
+        <div className="log-index-table-wrap">
+          <table className="log-index-table">
+            <thead><tr><th>구분</th><th>항목</th><th>건수</th></tr></thead>
+            <tbody>
+              {indexRows.length === 0 ? <tr><td colSpan="3" className="log-index-empty">표시할 데이터가 없습니다.</td></tr> : indexRows.map((row, index) => (
+                <tr key={`${row.group}-${row.label}-${index}`}><td>{row.group}</td><td>{row.label}</td><td>{row.count.toLocaleString()}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <LogDetailModal log={selectedLog} onClose={() => setSelectedLog(null)} title="로그 인덱싱 상세" />
     </div>
   )
 }

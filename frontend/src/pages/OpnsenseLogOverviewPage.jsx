@@ -1,19 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { Chart, ArcElement, Tooltip, Legend } from 'chart.js'
+import '../styles/logCsvExport.css'
 import {
-  Chart,
-  ArcElement,
-  Tooltip,
-  Legend,
-} from 'chart.js'
+  OPN_LOG_EXPORT_COLUMNS,
+  buildOpnsenseExportRows,
+  downloadCsv,
+  makeTimestampedFilename,
+} from '../utils/logCsvExport'
 
 Chart.register(ArcElement, Tooltip, Legend)
 
 const DEFAULT_FILTERS = {
-  historySize: 5000,
-  autoRefresh: true,
+  historySize: 300,
+  autoRefresh: false,
 }
 
-const REFRESH_INTERVAL_MS = 15000
+const REFRESH_INTERVAL_MS = 30000
 const TOP_LIMIT = 10
 
 const CATEGORY_OPTIONS = [
@@ -83,7 +85,6 @@ const splitAddress = (value) => {
     }
   }
 
-  // IPv6 주소가 포함될 수 있으므로 마지막 콜론 뒤 숫자만 포트로 본다.
   const match = text.match(/^(.*):(\d+)$/)
 
   if (!match) {
@@ -194,12 +195,7 @@ const normalizeOneLog = (item, index) => {
   const parsedSource = splitAddress(source)
   const parsedDestination = splitAddress(destination)
 
-  const action =
-    item.action ||
-    item.act ||
-    src.action ||
-    src.act ||
-    '-'
+  const action = item.action || item.act || src.action || src.act || '-'
 
   const label =
     item.label ||
@@ -247,16 +243,6 @@ const normalizeLogs = (payload) => {
   else if (Array.isArray(payload)) list = payload
 
   return list.map((item, index) => normalizeOneLog(item, index))
-}
-
-const formatTime = (value) => {
-  if (!value || value === '-') return '-'
-
-  const date = new Date(value)
-
-  if (Number.isNaN(date.getTime())) return value
-
-  return date.toLocaleString('ko-KR', { hour12: false })
 }
 
 const getLogValueByCategory = (log, categoryKey) => {
@@ -353,8 +339,9 @@ function DonutChart({ rows, total }) {
               boxHeight: 9,
               color: '#0f172a',
               font: {
-                size: 12,
-                weight: '700',
+                family: "'Segoe UI', 'Pretendard', 'Noto Sans KR', 'Apple SD Gothic Neo', Arial, sans-serif",
+                size: 13,
+                weight: '800',
               },
             },
           },
@@ -363,6 +350,16 @@ function DonutChart({ rows, total }) {
             titleColor: '#ffffff',
             bodyColor: '#e5e7eb',
             padding: 10,
+            titleFont: {
+              family: "'Segoe UI', 'Pretendard', 'Noto Sans KR', 'Apple SD Gothic Neo', Arial, sans-serif",
+              size: 13,
+              weight: '900',
+            },
+            bodyFont: {
+              family: "'Segoe UI', 'Pretendard', 'Noto Sans KR', 'Apple SD Gothic Neo', Arial, sans-serif",
+              size: 13,
+              weight: '800',
+            },
             callbacks: {
               label: (context) => {
                 const value = Number(context.raw || 0)
@@ -383,7 +380,8 @@ function DonutChart({ rows, total }) {
 
             ctx.save()
             ctx.fillStyle = '#0f172a'
-            ctx.font = '700 12px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+            ctx.font =
+              "800 13px 'Segoe UI', 'Pretendard', 'Noto Sans KR', 'Apple SD Gothic Neo', Arial, sans-serif" 
             ctx.textAlign = 'center'
             ctx.textBaseline = 'middle'
 
@@ -393,7 +391,6 @@ function DonutChart({ rows, total }) {
 
               const percent = Math.round((value / total) * 100)
 
-              // 작은 조각은 글자가 겹치므로 5% 이상만 표시
               if (percent < 5) return
 
               const position = arc.tooltipPosition()
@@ -463,12 +460,14 @@ function OpnsenseLogOverviewPage({ selectedFirewall, fetchOpnsenseLogs }) {
 
       setError('')
 
+      const limit = Math.min(Number(filters.historySize) || 300, 500)
+
       const data = await fetchOpnsenseLogs({
         search: '',
         field: 'any',
         operator: 'contains',
-        tableSize: filters.historySize,
-        historySize: filters.historySize,
+        tableSize: limit,
+        historySize: limit,
         resolveHostnames: false,
         onlyImportant: false,
       })
@@ -486,6 +485,7 @@ function OpnsenseLogOverviewPage({ selectedFirewall, fetchOpnsenseLogs }) {
 
   useEffect(() => {
     loadLogs()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedFirewall])
 
   useEffect(() => {
@@ -508,6 +508,7 @@ function OpnsenseLogOverviewPage({ selectedFirewall, fetchOpnsenseLogs }) {
         timerRef.current = null
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters.autoRefresh, filters.historySize, selectedFirewall])
 
   const categoryRows = useMemo(
@@ -534,6 +535,14 @@ function OpnsenseLogOverviewPage({ selectedFirewall, fetchOpnsenseLogs }) {
             ? Number(value)
             : value,
     }))
+  }
+
+  const handleExportCsv = () => {
+    downloadCsv(
+      makeTimestampedFilename('opnsense_log_overview'),
+      OPN_LOG_EXPORT_COLUMNS,
+      buildOpnsenseExportRows(logs),
+    )
   }
 
   return (
@@ -582,14 +591,21 @@ function OpnsenseLogOverviewPage({ selectedFirewall, fetchOpnsenseLogs }) {
             onChange={handleChange}
           >
             <option value={100}>100개</option>
+            <option value={300}>300개</option>
             <option value={500}>500개</option>
-            <option value={1000}>1000개</option>
-            <option value={5000}>5000개</option>
-            <option value={10000}>10000개</option>
           </select>
 
           <button type="button" onClick={() => loadLogs()}>
             갱신
+          </button>
+
+          <button
+            type="button"
+            className="csv"
+            onClick={handleExportCsv}
+            disabled={logs.length === 0}
+          >
+            CSV 내보내기
           </button>
         </div>
       </section>

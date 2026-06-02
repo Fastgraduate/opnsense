@@ -1,0 +1,1615 @@
+/* ============================================================
+   Unified responsive log page CSS
+   Replace frontend/src/styles/logCsvExport.css with this file.
+   ============================================================ */
+
+:root {
+  --log-card: #fff;
+  --log-border: #e5e7eb;
+  --log-border-strong: #cbd5e1;
+  --log-text: #0f172a;
+  --log-muted: #64748b;
+  --log-sub: #475569;
+  --log-primary: #2563eb;
+  --log-primary-soft: #eff6ff;
+  --log-green: #16a34a;
+  --log-shadow: 0 12px 30px rgba(15, 23, 42, 0.05);
+  --log-radius: 18px;
+}
+
+.event-log-page,
+.log-index-page,
+.sql-log-page,
+.opn-log-page,
+.opn-overview-page {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  gap: clamp(12px, 1.4vw, 18px);
+}
+
+.event-log-card,
+.log-index-card,
+.sql-log-card,
+.opn-log-header,
+.opn-log-filter-card,
+.opn-log-table-panel,
+.opn-overview-card,
+.opn-overview-hero,
+.opn-overview-toolbar {
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--log-border);
+  border-radius: var(--log-radius);
+  background: var(--log-card);
+  box-shadow: var(--log-shadow);
+}
+
+.event-log-header,
+.log-index-header,
+.sql-log-header,
+.opn-log-header,
+.opn-overview-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: clamp(12px, 2vw, 18px);
+  padding: clamp(16px, 2vw, 22px);
+}
+
+.event-log-eyebrow,
+.log-index-eyebrow,
+.sql-log-eyebrow,
+.opn-log-eyebrow {
+  margin: 0 0 4px;
+  color: var(--log-primary);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.event-log-header h2,
+.log-index-header h2,
+.sql-log-header h2,
+.opn-log-header h2,
+.opn-overview-hero h2 {
+  margin: 0;
+  color: var(--log-text);
+  font-size: clamp(20px, 2.2vw, 24px);
+  font-weight: 900;
+  line-height: 1.25;
+}
+
+.event-log-header span,
+.log-index-header span,
+.sql-log-header span,
+.opn-log-header span,
+.opn-overview-hero span {
+  display: inline-block;
+  margin-top: 6px;
+  color: var(--log-muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.event-log-actions,
+.log-index-actions,
+.sql-log-actions,
+.opn-log-actions,
+.opn-overview-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.event-log-actions button,
+.log-index-actions button,
+.sql-log-actions button,
+.opn-log-actions button,
+.opn-overview-controls button,
+.event-log-section-title button,
+.event-log-section-title select,
+.log-index-section-title button,
+.log-index-section-title select,
+.sql-log-section-title button,
+.sql-log-section-title select {
+  min-height: 38px;
+  border: 1px solid var(--log-border-strong);
+  border-radius: 12px;
+  background: #fff;
+  color: #334155;
+  padding: 0 13px;
+  font-size: 13px;
+  font-weight: 900;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.event-log-actions button:hover,
+.log-index-actions button:hover,
+.sql-log-actions button:hover,
+.opn-log-actions button:hover,
+.opn-overview-controls button:hover,
+.event-log-section-title button:hover,
+.log-index-section-title button:hover,
+.sql-log-section-title button:hover {
+  background: #f8fafc;
+}
+
+.event-log-actions button:disabled,
+.log-index-actions button:disabled,
+.sql-log-actions button:disabled,
+.opn-log-actions button:disabled,
+.opn-overview-controls button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.event-log-actions .csv,
+.log-index-actions .csv,
+.sql-log-actions .csv,
+.opn-log-actions .csv,
+.opn-overview-controls .csv {
+  border-color: var(--log-green);
+  background: var(--log-green);
+  color: #fff;
+}
+
+.event-log-error,
+.log-index-error,
+.sql-log-error,
+.opn-log-error {
+  padding: 12px 14px;
+  border: 1px solid #fecaca;
+  border-radius: 14px;
+  background: #fef2f2;
+  color: #b91c1c;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.event-log-section-title,
+.log-index-section-title,
+.sql-log-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: clamp(16px, 2vw, 20px) clamp(16px, 2vw, 22px) 12px;
+}
+
+.event-log-section-title > div,
+.log-index-section-title > div,
+.sql-log-section-title > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.event-log-section-title p,
+.log-index-section-title p,
+.sql-log-section-title p {
+  margin: 0;
+  color: var(--log-primary);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+
+.event-log-section-title h3,
+.log-index-section-title h3,
+.sql-log-section-title h3 {
+  margin: 0;
+  color: var(--log-text);
+  font-size: clamp(17px, 1.8vw, 20px);
+  font-weight: 900;
+  line-height: 1.25;
+}
+
+/* Preset buttons unified */
+.event-log-preset-grid,
+.log-index-preset-grid,
+.sql-log-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(190px, 100%), 1fr));
+  gap: 10px;
+  padding: 0 clamp(16px, 2vw, 22px) clamp(16px, 2vw, 22px);
+}
+
+.event-log-preset-grid button,
+.log-index-preset-grid button,
+.sql-log-preset-grid button {
+  min-width: 0;
+  min-height: 76px;
+  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: #fff;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.18s ease,
+    background 0.18s ease,
+    box-shadow 0.18s ease,
+    transform 0.18s ease;
+}
+
+.event-log-preset-grid button:hover,
+.log-index-preset-grid button:hover,
+.sql-log-preset-grid button:hover {
+  background: #f8fafc;
+  border-color: #bfdbfe;
+  transform: translateY(-1px);
+}
+
+.event-log-preset-grid button.active,
+.log-index-preset-grid button.active,
+.sql-log-preset-grid button.active {
+  border-color: var(--log-primary);
+  background: var(--log-primary-soft);
+  box-shadow: inset 0 0 0 1px var(--log-primary);
+}
+
+.event-log-preset-grid strong,
+.log-index-preset-grid strong,
+.sql-log-preset-grid strong {
+  display: block;
+  color: var(--log-text);
+  font-size: 14px;
+  font-weight: 900;
+  line-height: 1.25;
+}
+
+.event-log-preset-grid span,
+.log-index-preset-grid span,
+.sql-log-preset-grid span {
+  display: block;
+  margin-top: 5px;
+  color: var(--log-muted);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+/* Filters unified + responsive */
+.event-log-filter-card,
+.log-index-filter-card,
+.sql-log-filter-card,
+.opn-log-filter-card {
+  padding-bottom: clamp(16px, 2vw, 22px);
+}
+
+.event-log-filter-grid,
+.log-index-filter-grid,
+.sql-log-filter-grid,
+.opn-log-filter-grid,
+.event-log-filter-grid.expanded,
+.log-index-filter-grid.expanded,
+.sql-log-filter-grid.expanded {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(190px, 100%), 1fr));
+  gap: 12px;
+  padding: 0 clamp(16px, 2vw, 22px);
+}
+
+.opn-log-filter-grid {
+  padding-top: clamp(16px, 2vw, 20px);
+}
+
+.event-log-filter-grid label,
+.log-index-filter-grid label,
+.sql-log-filter-grid label,
+.opn-log-filter-grid label {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  color: var(--log-sub);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.event-log-filter-grid input,
+.event-log-filter-grid select,
+.log-index-filter-grid input,
+.log-index-filter-grid select,
+.sql-log-filter-grid input,
+.sql-log-filter-grid select,
+.opn-log-filter-grid input,
+.opn-log-filter-grid select,
+.opn-overview-controls select {
+  width: 100%;
+  min-width: 0;
+  min-height: 38px;
+  box-sizing: border-box;
+  border: 1px solid var(--log-border-strong);
+  border-radius: 12px;
+  padding: 0 11px;
+  color: var(--log-text);
+  background: #fff;
+  outline: none;
+}
+
+.event-log-filter-grid input:focus,
+.event-log-filter-grid select:focus,
+.log-index-filter-grid input:focus,
+.log-index-filter-grid select:focus,
+.sql-log-filter-grid input:focus,
+.sql-log-filter-grid select:focus,
+.opn-log-filter-grid input:focus,
+.opn-log-filter-grid select:focus {
+  border-color: var(--log-primary);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+/* Stats unified */
+.event-log-stats-grid,
+.log-index-stats-grid,
+.sql-log-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr));
+  gap: 12px;
+}
+
+.event-log-stat-card,
+.log-index-stat-card,
+.sql-log-stat-card {
+  min-width: 0;
+  min-height: 88px;
+  padding: 16px 18px;
+  border: 1px solid var(--log-border);
+  border-radius: var(--log-radius);
+  background: #fff;
+  box-shadow: var(--log-shadow);
+  display: grid;
+  align-content: center;
+}
+
+.event-log-stat-card span,
+.log-index-stat-card span,
+.sql-log-stat-card span {
+  display: block;
+  color: var(--log-muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.event-log-stat-card strong,
+.log-index-stat-card strong,
+.sql-log-stat-card strong {
+  display: block;
+  margin-top: 8px;
+  color: var(--log-text);
+  font-size: clamp(22px, 2.6vw, 28px);
+  font-weight: 900;
+}
+
+/* Bar chart unified */
+.event-log-bar-chart,
+.log-index-bar-chart,
+.sql-log-bar-chart {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  gap: 11px;
+  padding: 0 clamp(16px, 2vw, 22px) clamp(16px, 2vw, 22px);
+  box-sizing: border-box;
+}
+
+.event-log-bar-row,
+.log-index-bar-row,
+.sql-log-bar-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(110px, 170px) minmax(120px, 1fr) minmax(
+      64px,
+      92px
+    );
+  align-items: center;
+  gap: 12px;
+}
+
+.event-log-bar-label,
+.log-index-bar-label,
+.sql-log-bar-label {
+  overflow: hidden;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.event-log-bar-track,
+.log-index-bar-track,
+.sql-log-bar-track {
+  min-width: 0;
+  overflow: hidden;
+  height: 22px;
+  border-radius: 999px;
+  background: #f1f5f9;
+}
+
+.event-log-bar-fill,
+.log-index-bar-fill,
+.sql-log-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--log-primary), #60a5fa);
+  transition: width 0.25s ease;
+}
+
+.event-log-bar-count,
+.log-index-bar-count,
+.sql-log-bar-count {
+  color: var(--log-sub);
+  font-size: 12px;
+  font-weight: 900;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.event-log-chart-empty,
+.log-index-chart-empty,
+.sql-log-chart-empty {
+  min-height: 150px;
+  margin: 0 clamp(16px, 2vw, 22px) clamp(16px, 2vw, 22px);
+  padding: 18px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--log-border-strong);
+  border-radius: 14px;
+  color: var(--log-muted);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+/* Tables unified */
+.event-log-table-wrap,
+.log-index-table-wrap,
+.sql-log-table-wrap,
+.opn-log-table-wrap {
+  width: 100%;
+  min-width: 0;
+  overflow: auto;
+  max-height: 68vh;
+  padding: 0 clamp(10px, 1.4vw, 18px) clamp(12px, 1.6vw, 20px);
+  box-sizing: border-box;
+}
+
+.event-log-table,
+.log-index-table,
+.sql-log-table,
+.opn-log-table {
+  width: 100%;
+  min-width: min(1120px, 100%);
+  border-collapse: collapse;
+  table-layout: auto;
+}
+
+.log-index-table {
+  min-width: min(760px, 100%);
+}
+
+.event-log-table th,
+.log-index-table th,
+.sql-log-table th,
+.opn-log-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f8fafc;
+  color: var(--log-sub);
+  padding: 12px 10px;
+  border-bottom: 1px solid #e2e8f0;
+  font-size: 12px;
+  font-weight: 900;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.event-log-table td,
+.log-index-table td,
+.sql-log-table td,
+.opn-log-table td {
+  padding: 11px 10px;
+  border-bottom: 1px solid #f1f5f9;
+  color: #334155;
+  font-size: 13px;
+  vertical-align: top;
+}
+
+.event-log-table tr:hover td,
+.log-index-table tr:hover td,
+.sql-log-table tr:hover td,
+.opn-log-table tr:hover td {
+  background: #f8fafc;
+}
+
+.event-log-empty,
+.log-index-empty,
+.sql-log-empty,
+.opn-log-empty {
+  padding: 28px !important;
+  color: var(--log-muted) !important;
+  text-align: center !important;
+  font-weight: 900;
+}
+
+.event-log-count,
+.log-index-count,
+.sql-log-count {
+  color: var(--log-muted);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+/* Detail buttons */
+.event-log-detail-button,
+.log-index-detail-button,
+.sql-log-detail-button,
+.opn-log-detail-button {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--log-border-strong);
+  border-radius: 10px;
+  background: #fff;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 900;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.event-log-detail-button:hover,
+.log-index-detail-button:hover,
+.sql-log-detail-button:hover,
+.opn-log-detail-button:hover {
+  background: #f8fafc;
+}
+
+/* OPNsense action colors */
+.opn-log-action-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 58px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.opn-log-action-badge.pass {
+  background: #dcfce7;
+  color: #15803d;
+  border: 1px solid #86efac;
+}
+
+.opn-log-action-badge.block {
+  background: #fee2e2;
+  color: #b91c1c;
+  border: 1px solid #fca5a5;
+}
+
+.opn-log-action-badge.reject {
+  background: #ffedd5;
+  color: #c2410c;
+  border: 1px solid #fdba74;
+}
+
+.opn-log-action-badge.unknown {
+  background: #f1f5f9;
+  color: var(--log-sub);
+  border: 1px solid var(--log-border-strong);
+}
+
+/* Modal */
+.event-log-modal-backdrop,
+.opn-log-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(3px);
+}
+
+.event-log-modal,
+.opn-log-modal {
+  width: min(920px, 96vw);
+  max-height: 88vh;
+  min-width: 0;
+  overflow: hidden;
+  border-radius: 20px;
+  background: #fff;
+  box-shadow: 0 28px 80px rgba(15, 23, 42, 0.35);
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+}
+
+.event-log-modal-header,
+.opn-log-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--log-border);
+}
+
+.event-log-modal-header h3,
+.opn-log-modal-header h3 {
+  margin: 0;
+  color: var(--log-text);
+  font-size: 20px;
+  font-weight: 900;
+}
+
+.event-log-modal-header button,
+.opn-log-modal-header button {
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--log-border-strong);
+  border-radius: 11px;
+  background: #fff;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.event-log-modal-summary,
+.opn-log-modal-summary {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--log-border);
+  background: #f8fafc;
+}
+
+.event-log-modal-summary span,
+.opn-log-modal-summary span {
+  display: inline-flex;
+  padding: 7px 10px;
+  border-radius: 999px;
+  background: #fff;
+  color: var(--log-sub);
+  font-size: 12px;
+  font-weight: 800;
+  border: 1px solid #e2e8f0;
+  word-break: break-all;
+}
+
+.event-log-modal-pre,
+.opn-log-modal-pre {
+  margin: 0;
+  padding: 18px 20px;
+  overflow: auto;
+  background: var(--log-text);
+  color: #e2e8f0;
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
+    'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Dashboard-like responsiveness */
+@media (max-width: 1280px) {
+  .event-log-filter-grid,
+  .log-index-filter-grid,
+  .sql-log-filter-grid,
+  .opn-log-filter-grid,
+  .event-log-filter-grid.expanded,
+  .log-index-filter-grid.expanded,
+  .sql-log-filter-grid.expanded,
+  .event-log-preset-grid,
+  .log-index-preset-grid,
+  .sql-log-preset-grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(170px, 100%), 1fr));
+  }
+}
+
+@media (max-width: 980px) {
+  .event-log-header,
+  .log-index-header,
+  .sql-log-header,
+  .opn-log-header,
+  .opn-overview-hero,
+  .opn-overview-toolbar,
+  .opn-overview-card-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .event-log-actions,
+  .log-index-actions,
+  .sql-log-actions,
+  .opn-log-actions,
+  .opn-overview-controls {
+    justify-content: flex-start;
+  }
+
+  .event-log-bar-row,
+  .log-index-bar-row,
+  .sql-log-bar-row {
+    grid-template-columns: minmax(96px, 140px) minmax(100px, 1fr) minmax(
+        54px,
+        76px
+      );
+    gap: 8px;
+  }
+
+  .event-log-bar-count,
+  .log-index-bar-count,
+  .sql-log-bar-count {
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 720px) {
+  .event-log-section-title,
+  .log-index-section-title,
+  .sql-log-section-title {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .event-log-actions button,
+  .log-index-actions button,
+  .sql-log-actions button,
+  .opn-log-actions button,
+  .opn-overview-controls button,
+  .opn-overview-controls select,
+  .event-log-section-title select,
+  .log-index-section-title select,
+  .sql-log-section-title select {
+    width: 100%;
+  }
+
+  .event-log-bar-row,
+  .log-index-bar-row,
+  .sql-log-bar-row {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .event-log-bar-count,
+  .log-index-bar-count,
+  .sql-log-bar-count {
+    text-align: left;
+  }
+
+  .event-log-table,
+  .log-index-table,
+  .sql-log-table,
+  .opn-log-table {
+    min-width: 760px;
+  }
+
+  .event-log-modal,
+  .opn-log-modal {
+    width: 96vw;
+    max-height: 90vh;
+  }
+
+  .opn-overview-tabs,
+  .opn-overview-controls {
+    width: 100%;
+    align-items: stretch;
+  }
+
+  .opn-overview-tabs button {
+    flex: 1 1 140px;
+  }
+}
+
+@media (max-width: 520px) {
+  .event-log-header,
+  .log-index-header,
+  .sql-log-header,
+  .opn-log-header,
+  .opn-overview-hero {
+    padding: 14px;
+  }
+
+  .event-log-filter-grid,
+  .log-index-filter-grid,
+  .sql-log-filter-grid,
+  .opn-log-filter-grid,
+  .event-log-filter-grid.expanded,
+  .log-index-filter-grid.expanded,
+  .sql-log-filter-grid.expanded,
+  .event-log-preset-grid,
+  .log-index-preset-grid,
+  .sql-log-preset-grid {
+    grid-template-columns: 1fr;
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .event-log-stats-grid,
+  .log-index-stats-grid,
+  .sql-log-stats-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .event-log-table-wrap,
+  .log-index-table-wrap,
+  .sql-log-table-wrap,
+  .opn-log-table-wrap {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+
+  .event-log-table,
+  .log-index-table,
+  .sql-log-table,
+  .opn-log-table {
+    min-width: 720px;
+  }
+}
+
+/* SQL 로그 검색 페이지 - SQL editor 복구 */
+
+.sql-query-panel {
+  overflow: hidden;
+}
+
+.sql-query-editor-wrap {
+  padding: 0 clamp(16px, 2vw, 22px) 16px;
+}
+
+.sql-query-editor {
+  width: 100%;
+  min-height: 220px;
+  resize: vertical;
+  border: 1px solid #1e293b;
+  border-radius: 14px;
+  background: #0f172a;
+  color: #e5e7eb;
+  padding: 16px;
+  font-family:
+    Consolas, Monaco, 'Courier New', ui-monospace, SFMono-Regular, monospace;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.65;
+  outline: none;
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.08);
+}
+
+.sql-query-editor:focus {
+  border-color: #60a5fa;
+  box-shadow:
+    0 0 0 3px rgba(37, 99, 235, 0.18),
+    inset 0 0 0 1px rgba(148, 163, 184, 0.08);
+}
+
+.sql-query-help {
+  margin: 0 clamp(16px, 2vw, 22px) clamp(16px, 2vw, 22px);
+  padding: 12px 14px;
+  border: 1px solid #bfdbfe;
+  border-radius: 14px;
+  background: #eff6ff;
+  color: #1e40af;
+  display: grid;
+  gap: 5px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.sql-query-help strong {
+  color: #1d4ed8;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.sql-query-help span {
+  line-height: 1.5;
+}
+
+.sql-sample-panel {
+  overflow: hidden;
+}
+
+.sql-sample-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
+  gap: 10px;
+  padding: 0 clamp(16px, 2vw, 22px) clamp(16px, 2vw, 22px);
+}
+
+.sql-sample-grid button {
+  min-height: 96px;
+  padding: 13px;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: #ffffff;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sql-sample-grid button:hover {
+  border-color: #bfdbfe;
+  background: #f8fafc;
+}
+
+.sql-sample-grid strong {
+  display: block;
+  margin-bottom: 8px;
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.sql-sample-grid code {
+  display: block;
+  color: #475569;
+  font-family:
+    Consolas, Monaco, 'Courier New', ui-monospace, SFMono-Regular, monospace;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.45;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.sql-executed-info {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 0 clamp(16px, 2vw, 22px) 12px;
+}
+
+.sql-executed-info span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.sql-log-table td {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sql-log-table th {
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .sql-query-editor {
+    min-height: 180px;
+    font-size: 13px;
+  }
+
+  .sql-sample-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* =========================================================
+   OPNsense Log Overview Page
+   다른 로그 페이지와 디자인 통일한 개요 페이지 전용 CSS
+   ========================================================= */
+
+.opn-overview-page {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  gap: 16px;
+  font-family:
+    'Segoe UI', 'Pretendard', 'Noto Sans KR', 'Apple SD Gothic Neo', Arial,
+    sans-serif;
+}
+
+/* 상단 헤더 카드 */
+.opn-overview-hero {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 22px;
+  border: 1px solid var(--log-border);
+  border-radius: var(--log-radius);
+  background: var(--log-card);
+  box-shadow: var(--log-shadow);
+}
+
+.opn-overview-hero > div:first-child {
+  min-width: 0;
+}
+
+.opn-overview-hero .opn-log-eyebrow {
+  margin: 0 0 6px;
+  color: var(--log-primary);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.opn-overview-hero h2 {
+  margin: 0;
+  color: var(--log-text);
+  font-size: 24px;
+  font-weight: 900;
+  line-height: 1.25;
+  letter-spacing: -0.04em;
+}
+
+.opn-overview-hero span {
+  display: inline-block;
+  margin-top: 7px;
+  color: var(--log-muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+/* 상태 배지 */
+.opn-overview-hero .opn-log-status {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 13px;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.opn-overview-hero .opn-log-status i {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #22c55e;
+}
+
+.opn-overview-hero .opn-log-status.loading i {
+  background: #f59e0b;
+  animation: opnOverviewPulse 1s infinite;
+}
+
+@keyframes opnOverviewPulse {
+  0% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(1.25);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* 카테고리 / 컨트롤 카드 */
+.opn-overview-toolbar {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 18px;
+  border: 1px solid var(--log-border);
+  border-radius: var(--log-radius);
+  background: var(--log-card);
+  box-shadow: var(--log-shadow);
+}
+
+.opn-overview-tabs {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.opn-overview-tabs button {
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid var(--log-border);
+  border-radius: 12px;
+  background: #ffffff;
+  color: #dc2626;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.opn-overview-tabs button:hover {
+  background: #f8fafc;
+  border-color: var(--log-border-strong);
+  color: #b91c1c;
+}
+
+.opn-overview-tabs button.active {
+  border-color: #111827;
+  background: #ffffff;
+  color: var(--log-text);
+  box-shadow: inset 0 0 0 1px #111827;
+}
+
+/* 오른쪽 컨트롤 */
+.opn-overview-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.opn-overview-controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 38px;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.opn-overview-controls input[type='checkbox'] {
+  width: 15px;
+  height: 15px;
+  min-width: 15px;
+  margin: 0;
+  accent-color: var(--log-primary);
+}
+
+.opn-overview-controls select {
+  width: 130px;
+  min-height: 38px;
+  border: 1px solid var(--log-border-strong);
+  border-radius: 12px;
+  background: #ffffff;
+  color: var(--log-text);
+  padding: 0 11px;
+  font-size: 13px;
+  font-weight: 900;
+  outline: none;
+}
+
+.opn-overview-controls select:focus {
+  border-color: var(--log-primary);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.opn-overview-controls button {
+  min-height: 38px;
+  padding: 0 13px;
+  border: 1px solid var(--log-border-strong);
+  border-radius: 12px;
+  background: #ffffff;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 900;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.opn-overview-controls button:hover {
+  background: #f8fafc;
+}
+
+.opn-overview-controls button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.opn-overview-controls button.csv {
+  border-color: var(--log-green);
+  background: var(--log-green);
+  color: #ffffff;
+}
+
+.opn-overview-controls button.csv:hover {
+  background: #15803d;
+}
+
+.opn-overview-page .opn-log-error {
+  padding: 12px 14px;
+  border: 1px solid #fecaca;
+  border-radius: 14px;
+  background: #fef2f2;
+  color: #b91c1c;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+/* 메인 카드 */
+.opn-overview-card {
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--log-border);
+  border-radius: var(--log-radius);
+  background: var(--log-card);
+  box-shadow: var(--log-shadow);
+}
+
+.opn-overview-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--log-border);
+}
+
+.opn-overview-card-header > div:first-child {
+  min-width: 0;
+}
+
+.opn-overview-card-header .opn-log-eyebrow {
+  margin: 0 0 5px;
+  color: var(--log-primary);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.opn-overview-card-header h3 {
+  margin: 0;
+  color: var(--log-text);
+  font-size: 20px;
+  font-weight: 900;
+  line-height: 1.25;
+  letter-spacing: -0.035em;
+}
+
+.opn-overview-card-header span {
+  display: block;
+  margin-top: 7px;
+  color: var(--log-muted);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+/* 최다 항목 카드 */
+.opn-overview-top {
+  flex-shrink: 0;
+  min-width: 150px;
+  padding: 12px 14px;
+  border: 1px solid #dbeafe;
+  border-radius: 16px;
+  background: var(--log-primary-soft);
+  text-align: right;
+}
+
+.opn-overview-top span {
+  display: block;
+  margin: 0;
+  color: var(--log-primary);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.opn-overview-top strong {
+  display: block;
+  margin-top: 5px;
+  max-width: 190px;
+  color: var(--log-text);
+  font-size: 16px;
+  font-weight: 900;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.opn-overview-top em {
+  display: block;
+  margin-top: 4px;
+  color: #1d4ed8;
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+/* 차트 영역 */
+.opn-overview-chart {
+  width: 100%;
+  height: 360px;
+  min-height: 320px;
+  padding: 20px;
+  box-sizing: border-box;
+}
+
+.opn-overview-chart canvas {
+  font-family:
+    'Segoe UI', 'Pretendard', 'Noto Sans KR', 'Apple SD Gothic Neo', Arial,
+    sans-serif;
+}
+
+/* 빈 상태 */
+.opn-overview-empty {
+  min-height: 260px;
+  margin: 20px;
+  border: 1px dashed var(--log-border-strong);
+  border-radius: 16px;
+  background: #f8fafc;
+  color: var(--log-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+/* 표 */
+.opn-overview-table-wrap {
+  padding: 0 18px 18px;
+  overflow-x: auto;
+}
+
+.opn-overview-table {
+  width: 100%;
+  min-width: 620px;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.opn-overview-table th {
+  padding: 13px 12px;
+  border: 1px solid var(--log-border);
+  background: #f8fafc;
+  color: var(--log-sub);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.opn-overview-table td {
+  padding: 13px 12px;
+  border: 1px solid var(--log-border);
+  background: #ffffff;
+  color: var(--log-text);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: -0.015em;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.opn-overview-table tr:hover td {
+  background: #f8fafc;
+}
+
+.opn-overview-table th:nth-child(2),
+.opn-overview-table td:nth-child(2) {
+  width: 160px;
+  text-align: right;
+}
+
+/* 폰트 강제 통일 */
+.opn-overview-page,
+.opn-overview-page *,
+.opn-overview-hero,
+.opn-overview-toolbar,
+.opn-overview-card,
+.opn-overview-table,
+.opn-overview-table th,
+.opn-overview-table td,
+.opn-overview-tabs button,
+.opn-overview-controls button,
+.opn-overview-controls select {
+  font-family:
+    'Segoe UI', 'Pretendard', 'Noto Sans KR', 'Apple SD Gothic Neo', Arial,
+    sans-serif !important;
+}
+
+/* 반응형 */
+@media (max-width: 1200px) {
+  .opn-overview-toolbar {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .opn-overview-controls {
+    justify-content: flex-start;
+  }
+
+  .opn-overview-chart {
+    height: 330px;
+  }
+}
+
+@media (max-width: 900px) {
+  .opn-overview-hero,
+  .opn-overview-card-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .opn-overview-hero .opn-log-status {
+    width: fit-content;
+  }
+
+  .opn-overview-top {
+    width: 100%;
+    text-align: left;
+  }
+
+  .opn-overview-top strong {
+    max-width: none;
+  }
+
+  .opn-overview-tabs button {
+    flex: 1 1 130px;
+  }
+
+  .opn-overview-controls select,
+  .opn-overview-controls button {
+    flex: 1 1 130px;
+  }
+}
+
+@media (max-width: 700px) {
+  .opn-overview-hero {
+    padding: 16px;
+  }
+
+  .opn-overview-hero h2 {
+    font-size: 21px;
+  }
+
+  .opn-overview-toolbar {
+    padding: 14px;
+  }
+
+  .opn-overview-controls {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .opn-overview-controls label,
+  .opn-overview-controls select,
+  .opn-overview-controls button {
+    width: 100%;
+  }
+
+  .opn-overview-card-header {
+    padding: 16px;
+  }
+
+  .opn-overview-chart {
+    height: 280px;
+    min-height: 260px;
+    padding: 12px;
+  }
+
+  .opn-overview-table-wrap {
+    padding: 0 12px 12px;
+  }
+
+  .opn-overview-table {
+    min-width: 520px;
+  }
+}
+/* =========================================================
+   Bar Chart title wrap fix
+   방화벽 이벤트 로그 / 로그 인덱싱 페이지 차트 제목 줄바꿈 수정
+   ========================================================= */
+
+.event-log-chart-card .event-log-section-title,
+.log-index-card .log-index-section-title,
+.sql-log-card .sql-log-section-title {
+  display: grid;
+  grid-template-columns: minmax(160px, auto) minmax(220px, 1fr);
+  align-items: center;
+  gap: 16px;
+}
+
+.event-log-chart-card .event-log-section-title > div,
+.log-index-card .log-index-section-title > div,
+.sql-log-card .sql-log-section-title > div {
+  min-width: 160px;
+  width: max-content;
+  max-width: 260px;
+}
+
+.event-log-chart-card .event-log-section-title h3,
+.log-index-card .log-index-section-title h3,
+.sql-log-card .sql-log-section-title h3 {
+  white-space: nowrap;
+  word-break: keep-all;
+  overflow-wrap: normal;
+  line-height: 1.25;
+}
+
+.event-log-chart-card .event-log-section-title p,
+.log-index-card .log-index-section-title p,
+.sql-log-card .sql-log-section-title p {
+  white-space: nowrap;
+  word-break: keep-all;
+}
+
+.event-log-chart-card .event-log-section-title select,
+.log-index-card .log-index-section-title select,
+.sql-log-card .sql-log-section-title select {
+  width: 100%;
+  min-width: 220px;
+  justify-self: stretch;
+}
+
+/* 로그 인덱싱 페이지에서 '인덱싱 분포'가 세로로 깨지는 것 방지 */
+.log-index-card .log-index-section-title h3 {
+  min-width: 120px;
+}
+
+/* 방화벽 이벤트 로그 페이지에서 '막대그래프'가 세로로 깨지는 것 방지 */
+.event-log-chart-card .event-log-section-title h3 {
+  min-width: 100px;
+}
+
+/* 작은 화면에서는 자연스럽게 위아래 배치 */
+@media (max-width: 720px) {
+  .event-log-chart-card .event-log-section-title,
+  .log-index-card .log-index-section-title,
+  .sql-log-card .sql-log-section-title {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .event-log-chart-card .event-log-section-title > div,
+  .log-index-card .log-index-section-title > div,
+  .sql-log-card .sql-log-section-title > div {
+    width: 100%;
+    max-width: none;
+  }
+
+  .event-log-chart-card .event-log-section-title select,
+  .log-index-card .log-index-section-title select,
+  .sql-log-card .sql-log-section-title select {
+    width: 100%;
+    min-width: 0;
+  }
+}

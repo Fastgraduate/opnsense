@@ -11,15 +11,13 @@ import LogsPage from './pages/LogsPage'
 import RulesPage from './pages/RulesPage'
 import OpnsenseFirewallLogsPage from './pages/OpnsenseFirewallLogsPage'
 import OpnsenseLogOverviewPage from './pages/OpnsenseLogOverviewPage'
+import FirewallInterfaceRulesPage from './pages/FirewallInterfaceRulesPage'
 
 import { createMockFirewallEventLogs } from './mocks/mockFirewallEventLogs'
 
 const API_BASE = 'http://127.0.0.1:8000'
 const TRAFFIC_HISTORY_LIMIT = 20
-
-// Elastic 연결이 어려울 때 true.
-// 실제 Elastic 로그를 사용할 때는 false로 변경.
-const USE_MOCK_EVENT_LOGS = true
+const USE_MOCK_EVENT_LOGS = false
 
 function App() {
   const [currentPage, setCurrentPage] = useState('dashboard')
@@ -35,6 +33,7 @@ function App() {
   const [autoRefresh, setAutoRefresh] = useState(true)
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+
   const [logs, setLogs] = useState([
     {
       id: 1,
@@ -81,9 +80,16 @@ function App() {
     if (typeof data === 'string') return data
     if (data.detail?.message) return data.detail.message
     if (typeof data.detail === 'string') return data.detail
+    if (data.detail?.detail) return data.detail.detail
+    if (data.detail?.error) return data.detail.error
     if (data.message) return data.message
     if (data.error) return data.error
-    return fallback
+
+    try {
+      return JSON.stringify(data.detail || data)
+    } catch {
+      return fallback
+    }
   }
 
   const toNumber = (value) => {
@@ -613,6 +619,156 @@ function App() {
     return data
   }
 
+  const fetchFirewallInterfaces = async () => {
+    if (!selectedFirewallId) {
+      throw new Error('방화벽을 먼저 선택하세요.')
+    }
+
+    const res = await fetch(
+      `${API_BASE}/api/firewalls/${selectedFirewallId}/interfaces`,
+    )
+    const data = await res.json()
+
+    if (!res.ok) {
+      throw new Error(parseErrorMessage(data, '인터페이스 목록 조회 실패'))
+    }
+
+    return data
+  }
+
+  const fetchInterfaceRules = async (interfaceKey = '') => {
+    if (!selectedFirewallId) {
+      throw new Error('방화벽을 먼저 선택하세요.')
+    }
+
+    const url = interfaceKey
+      ? `${API_BASE}/api/firewalls/${selectedFirewallId}/interface-rules?interface=${encodeURIComponent(
+          interfaceKey,
+        )}`
+      : `${API_BASE}/api/firewalls/${selectedFirewallId}/interface-rules`
+
+    const res = await fetch(url)
+    const data = await res.json()
+
+    if (!res.ok) {
+      throw new Error(parseErrorMessage(data, '인터페이스별 룰 조회 실패'))
+    }
+
+    return data
+  }
+
+  const fetchLegacyInterfaceRules = async (interfaceKey = 'lan') => {
+    if (!selectedFirewallId) {
+      throw new Error('방화벽을 먼저 선택하세요.')
+    }
+
+    const res = await fetch(
+      `${API_BASE}/api/firewalls/${selectedFirewallId}/legacy-interface-rules?interface=${encodeURIComponent(
+        interfaceKey || 'lan',
+      )}`,
+    )
+
+    const data = await res.json()
+
+    if (!res.ok) {
+      throw new Error(parseErrorMessage(data, 'OPNsense WebGUI 룰 조회 실패'))
+    }
+
+    return data
+  }
+
+  const createInterfaceRule = async (payload) => {
+    if (!selectedFirewallId) {
+      throw new Error('방화벽을 먼저 선택하세요.')
+    }
+
+    const res = await fetch(
+      `${API_BASE}/api/firewalls/${selectedFirewallId}/interface-rules`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    )
+
+    const data = await res.json()
+
+    if (!res.ok) {
+      throw new Error(parseErrorMessage(data, '인터페이스 룰 추가 실패'))
+    }
+
+    addLog('INFO', `인터페이스 룰 추가: ${payload.description || payload.interface}`)
+    return data
+  }
+
+  const updateInterfaceRule = async (uuid, payload) => {
+    if (!selectedFirewallId) {
+      throw new Error('방화벽을 먼저 선택하세요.')
+    }
+
+    const res = await fetch(
+      `${API_BASE}/api/firewalls/${selectedFirewallId}/interface-rules/${uuid}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    )
+
+    const data = await res.json()
+
+    if (!res.ok) {
+      throw new Error(parseErrorMessage(data, '인터페이스 룰 수정 실패'))
+    }
+
+    addLog('INFO', `인터페이스 룰 수정: ${payload.description || uuid}`)
+    return data
+  }
+
+  const deleteInterfaceRule = async (uuid) => {
+    if (!selectedFirewallId) {
+      throw new Error('방화벽을 먼저 선택하세요.')
+    }
+
+    const res = await fetch(
+      `${API_BASE}/api/firewalls/${selectedFirewallId}/interface-rules/${uuid}`,
+      {
+        method: 'DELETE',
+      },
+    )
+
+    const data = await res.json()
+
+    if (!res.ok) {
+      throw new Error(parseErrorMessage(data, '인터페이스 룰 삭제 실패'))
+    }
+
+    addLog('WARN', `인터페이스 룰 삭제: ${uuid}`)
+    return data
+  }
+
+  const applyInterfaceRules = async () => {
+    if (!selectedFirewallId) {
+      throw new Error('방화벽을 먼저 선택하세요.')
+    }
+
+    const res = await fetch(
+      `${API_BASE}/api/firewalls/${selectedFirewallId}/interface-rules/apply`,
+      {
+        method: 'POST',
+      },
+    )
+
+    const data = await res.json()
+
+    if (!res.ok) {
+      throw new Error(parseErrorMessage(data, '인터페이스 룰 적용 실패'))
+    }
+
+    addLog('INFO', '인터페이스 룰 변경사항 적용 완료')
+    return data
+  }
+
   const rules = Array.isArray(dashboard?.rules?.rows)
     ? dashboard.rules.rows
     : []
@@ -672,6 +828,19 @@ function App() {
             handleDeleteRule={handleDeleteRule}
             resetForm={resetForm}
             selectedFirewall={selectedFirewall}
+          />
+        )}
+
+        {currentPage === 'interfaceRules' && (
+          <FirewallInterfaceRulesPage
+            selectedFirewall={selectedFirewall}
+            fetchFirewallInterfaces={fetchFirewallInterfaces}
+            fetchInterfaceRules={fetchInterfaceRules}
+            fetchLegacyInterfaceRules={fetchLegacyInterfaceRules}
+            createInterfaceRule={createInterfaceRule}
+            updateInterfaceRule={updateInterfaceRule}
+            deleteInterfaceRule={deleteInterfaceRule}
+            applyInterfaceRules={applyInterfaceRules}
           />
         )}
 
