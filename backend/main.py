@@ -2409,3 +2409,483 @@ def get_legacy_interface_rules(firewall_id: int, interface: str = "lan"):
         "candidateTableCount": parsed["candidateTableCount"],
         "message": "WebGUI HTML 파싱 결과입니다. 자동 생성/레거시 룰은 조회 전용입니다.",
     }
+
+# ============================================================
+# Security Automation MVP
+# 붙여넣기 위치: main.py 맨 아래
+#
+# 필요 전제:
+# - app
+# - get_firewall_or_404
+# - serialize_firewall
+# - search_firewall_events
+# - opnsense_request
+# - safe_apply_firewall
+# 위 함수들이 main.py 안에 이미 있어야 합니다.
+# ============================================================
+
+import hashlib
+import ipaddress
+from datetime import datetime, timezone
+from urllib.parse import quote as _security_quote
+
+from pydantic import BaseModel as _SecurityBaseModel
+
+
+SECURITY_ALERTS_DB = BASE_DIR / "security_alerts.json"
+SECURITY_BLOCKED_DB = BASE_DIR / "security_blocked_ips.json"
+DEFAULT_SECURITY_ALIAS = os.getenv("SECURITY_BLOCK_ALIAS", "blocked_attackers").strip() or "blocked_attackers"
+
+
+class SecurityBlockBody(_SecurityBaseModel):
+    source_ip: str
+    alias_name: str = DEFAULT_SECURITY_ALIAS
+    reason: str = "blocked by security automation"
+    force: bool = False
+
+
+def _security_load_json(path: Path, default):
+    try:
+        if not path.exists():
+            return default
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if data is not None else default
+    except Exception:
+        return default
+
+
+def _security_save_json(path: Path, data):
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _security_to_int(value, default=0):
+    try:
+        if value in (None, "", "-"):
+            return default
+        return int(float(str(value)))
+    except Exception:
+        return default
+
+
+def _security_text(value, default="-"):
+    if value in (None, ""):
+        return default
+    if isinstance(value, (dict, list)):
+        try:
+            return json.dumps(value, ensure_ascii=False)
+        except Exception:
+            return default
+    return str(value)
+
+
+def _security_get_nested(data, path, default=""):
+    cur = data
+    for key in str(path).split("."):
+        if not isinstance(cur, dict):
+            return default
+        cur = cur.get(key)
+        if cur is None:
+            return default
+    return cur
+
+
+def _security_is_private_or_reserved(ip_text: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(str(ip_text).strip())
+        return ip.is_private or ip.is_loopback or ip.is_reserved or ip.is_multicast or ip.is_link_local
+    except Exception:
+        return True
+
+
+def _security_alert_id(row: Dict[str, Any]) -> str:
+    raw = "|".join([
+        _security_text(row.get("timestamp"), ""),
+        _security_text(row.get("source_ip"), ""),
+        _security_text(row.get("destination_ip"), ""),
+        _security_text(row.get("destination_port"), ""),
+        _security_text(row.get("rule"), ""),
+        _security_text(row.get("event_type"), ""),
+    ])
+    return hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()[:16]
+
+
+def _security_keyword_score(text: str) -> Tuple[int, List[str]]:
+    keywords = {
+        "cve": 20,
+        "exploit": 22,
+        "shell": 18,
+        "command": 16,
+        "injection": 18,
+        "sql": 14,
+        "xss": 14,
+        "malware": 22,
+        "trojan": 22,
+        "ransom": 25,
+        "scan": 12,
+        "bruteforce": 18,
+        "brute force": 18,
+        "dos": 20,
+        "ddos": 25,
+        "web attack": 16,
+        "attempted-admin": 16,
+        "attempted-recon": 12,
+        "bad-unknown": 10,
+    }
+
+    lowered = text.lower()
+    score = 0
+    reasons = []
+
+    for keyword, value in keywords.items():
+        if keyword in lowered:
+            score += value
+            reasons.append(f"signature/category keyword: {keyword} +{value}")
+
+    return min(score, 35), reasons[:5]
+
+
+def _security_calculate_risk(row: Dict[str, Any], source_count: int = 1) -> Dict[str, Any]:
+    raw = row.get("raw") if isinstance(row.get("raw"), dict) else {}
+
+    event_type = _security_text(row.get("event_type") or row.get("action"), "").lower()
+    signature = _security_text(row.get("rule"), "")
+    category = _security_text(row.get("category"), "")
+    protocol = _security_text(row.get("protocol"), "").lower()
+    src_ip = _security_text(row.get("source_ip"), "")
+    dst_ip = _security_text(row.get("destination_ip"), "")
+    dst_port = _security_to_int(row.get("destination_port"), 0)
+
+    severity = _security_to_int(row.get("severity"), 0)
+
+    score = 0
+    reasons = []
+
+    if event_type == "alert" or "alert" in event_type:
+        score += 25
+        reasons.append("Suricata alert event +25")
+    elif event_type in {"drop", "blocked", "block", "deny"}:
+        score += 20
+        reasons.append("blocked/drop event +20")
+    else:
+        score += 5
+        reasons.append("base network event +5")
+
+    if severity == 1:
+        score += 30
+        reasons.append("high severity 1 +30")
+    elif severity == 2:
+        score += 22
+        reasons.append("medium severity 2 +22")
+    elif severity == 3:
+        score += 12
+        reasons.append("low severity 3 +12")
+    elif severity > 0:
+        score += 8
+        reasons.append(f"severity {severity} +8")
+
+    keyword_score, keyword_reasons = _security_keyword_score(f"{signature} {category}")
+    if keyword_score:
+        score += keyword_score
+        reasons.extend(keyword_reasons)
+
+    if source_count >= 10:
+        score += 25
+        reasons.append(f"same source repeated {source_count} times +25")
+    elif source_count >= 5:
+        score += 18
+        reasons.append(f"same source repeated {source_count} times +18")
+    elif source_count >= 3:
+        score += 10
+        reasons.append(f"same source repeated {source_count} times +10")
+
+    if dst_port in {22, 23, 3389, 445, 139, 3306, 5432, 6379, 9200, 5601}:
+        score += 12
+        reasons.append(f"sensitive destination port {dst_port} +12")
+    elif dst_port in {80, 443, 8080, 8443}:
+        score += 7
+        reasons.append(f"web service destination port {dst_port} +7")
+
+    if protocol in {"tcp", "udp", "icmp"}:
+        score += 3
+        reasons.append(f"protocol {protocol} +3")
+
+    if src_ip and src_ip != "-" and not _security_is_private_or_reserved(src_ip):
+        score += 8
+        reasons.append("external source ip +8")
+
+    # Suricata message JSON fallback.
+    alert_sig = _security_get_nested(raw, "alert.signature", "")
+    alert_cat = _security_get_nested(raw, "alert.category", "")
+    if alert_sig or alert_cat:
+        extra_score, extra_reasons = _security_keyword_score(f"{alert_sig} {alert_cat}")
+        if extra_score:
+            score += min(extra_score, 15)
+            reasons.extend(extra_reasons[:2])
+
+    score = max(0, min(100, int(score)))
+
+    if score >= 90:
+        level = "critical"
+        label = "매우 높음"
+    elif score >= 70:
+        level = "high"
+        label = "높음"
+    elif score >= 40:
+        level = "medium"
+        label = "중간"
+    else:
+        level = "low"
+        label = "낮음"
+
+    recommended_action = "notify"
+    if score >= 90:
+        recommended_action = "auto_block_candidate"
+    elif score >= 70:
+        recommended_action = "approval_required"
+    elif score >= 40:
+        recommended_action = "watch"
+
+    return {
+        "score": score,
+        "level": level,
+        "label": label,
+        "reasons": reasons[:8],
+        "recommended_action": recommended_action,
+    }
+
+
+def _security_build_alerts(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    source_counts: Dict[str, int] = {}
+    for row in rows:
+        src_ip = _security_text(row.get("source_ip"), "-")
+        if src_ip and src_ip != "-":
+            source_counts[src_ip] = source_counts.get(src_ip, 0) + 1
+
+    saved = _security_load_json(SECURITY_ALERTS_DB, {})
+    if not isinstance(saved, dict):
+        saved = {}
+
+    alerts = []
+
+    for row in rows:
+        src_ip = _security_text(row.get("source_ip"), "-")
+        risk = _security_calculate_risk(row, source_counts.get(src_ip, 1))
+        alert_id = _security_alert_id(row)
+        previous = saved.get(alert_id, {})
+
+        status = previous.get("status") or "detected"
+        if risk["score"] >= 90 and status == "detected":
+            status = "auto_block_candidate"
+        elif risk["score"] >= 70 and status == "detected":
+            status = "approval_required"
+
+        alert = {
+            "id": alert_id,
+            "timestamp": row.get("timestamp"),
+            "source_ip": row.get("source_ip"),
+            "source_port": row.get("source_port"),
+            "destination_ip": row.get("destination_ip"),
+            "destination_port": row.get("destination_port"),
+            "protocol": row.get("protocol"),
+            "event_type": row.get("event_type"),
+            "signature": row.get("rule"),
+            "category": row.get("category"),
+            "severity": row.get("severity"),
+            "host": row.get("host"),
+            "risk": risk,
+            "status": status,
+            "response": previous.get("response"),
+            "raw": row.get("raw"),
+        }
+
+        saved[alert_id] = {
+            **previous,
+            "id": alert_id,
+            "status": status,
+            "last_seen": int(time.time()),
+            "risk_score": risk["score"],
+            "source_ip": row.get("source_ip"),
+            "destination_ip": row.get("destination_ip"),
+            "signature": row.get("rule"),
+            "response": previous.get("response"),
+        }
+
+        alerts.append(alert)
+
+    _security_save_json(SECURITY_ALERTS_DB, saved)
+    return alerts
+
+
+def _security_filter_attack_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    attack_rows = []
+
+    for row in rows:
+        event_type = _security_text(row.get("event_type") or row.get("action"), "").lower()
+        signature = _security_text(row.get("rule"), "").lower()
+        category = _security_text(row.get("category"), "").lower()
+        severity = _security_to_int(row.get("severity"), 0)
+
+        if "alert" in event_type:
+            attack_rows.append(row)
+            continue
+        if severity in {1, 2}:
+            attack_rows.append(row)
+            continue
+        if any(k in f"{signature} {category}" for k in [
+            "attack", "exploit", "malware", "trojan", "scan", "shell", "injection", "cve", "brute"
+        ]):
+            attack_rows.append(row)
+            continue
+
+    return attack_rows
+
+
+@app.get("/api/firewalls/{firewall_id}/security-alerts")
+def get_security_alerts(
+    firewall_id: int,
+    minutes: int = 60,
+    size: int = 200,
+    min_risk: int = 0,
+    include_all_events: bool = False,
+):
+    target = get_firewall_or_404(firewall_id)
+    log_index = str(target.get("log_index", "logs-suricata.eve-*"))
+
+    safe_size = max(1, min(int(size or 200), 500))
+    safe_minutes = max(1, min(int(minutes or 60), 10080))
+
+    rows = search_firewall_events(
+        target=target,
+        log_index=log_index,
+        size=safe_size,
+        minutes=safe_minutes,
+        action="",
+        interface="",
+        query_text="",
+    )
+
+    source_rows = rows if include_all_events else _security_filter_attack_rows(rows)
+    alerts = _security_build_alerts(source_rows)
+    alerts = [alert for alert in alerts if int(alert.get("risk", {}).get("score", 0)) >= int(min_risk or 0)]
+
+    level_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+    status_counts: Dict[str, int] = {}
+
+    for alert in alerts:
+        level = alert.get("risk", {}).get("level", "low")
+        level_counts[level] = level_counts.get(level, 0) + 1
+        status = alert.get("status", "detected")
+        status_counts[status] = status_counts.get(status, 0) + 1
+
+    return {
+        "firewall": serialize_firewall(target),
+        "rows": alerts,
+        "summary": {
+            "total": len(alerts),
+            "level_counts": level_counts,
+            "status_counts": status_counts,
+            "auto_block_candidates": sum(1 for a in alerts if a.get("risk", {}).get("score", 0) >= 90),
+            "approval_required": sum(1 for a in alerts if a.get("risk", {}).get("score", 0) >= 70),
+        },
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.post("/api/firewalls/{firewall_id}/security-alerts/{alert_id}/block")
+def block_security_alert(firewall_id: int, alert_id: str, body: SecurityBlockBody):
+    target = get_firewall_or_404(firewall_id)
+    source_ip = str(body.source_ip or "").strip()
+
+    if not source_ip:
+        raise HTTPException(status_code=400, detail="차단할 source_ip가 필요합니다.")
+
+    try:
+        ipaddress.ip_address(source_ip)
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"올바르지 않은 IP 주소입니다: {source_ip}")
+
+    if _security_is_private_or_reserved(source_ip) and not body.force:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "사설/예약/로컬 IP는 기본적으로 자동 차단하지 않습니다. "
+                "실습 환경에서 강제로 차단하려면 force=true로 요청하세요."
+            ),
+        )
+
+    alias_name = str(body.alias_name or DEFAULT_SECURITY_ALIAS).strip() or DEFAULT_SECURITY_ALIAS
+    safe_alias = _security_quote(alias_name, safe="")
+
+    result = opnsense_request(
+        target,
+        "POST",
+        f"/api/firewall/alias_util/add/{safe_alias}",
+        json_data={"address": source_ip},
+    )
+
+    apply_result = None
+    try:
+        apply_result = safe_apply_firewall(target)
+    except Exception as e:
+        apply_result = {"ok": False, "error": str(e)}
+
+    now = int(time.time())
+    saved = _security_load_json(SECURITY_ALERTS_DB, {})
+    if not isinstance(saved, dict):
+        saved = {}
+
+    previous = saved.get(alert_id, {})
+    response = {
+        "type": "alias_block",
+        "target_ip": source_ip,
+        "alias_name": alias_name,
+        "reason": body.reason,
+        "created_at": now,
+        "opnsense_result": result,
+        "apply": apply_result,
+    }
+
+    saved[alert_id] = {
+        **previous,
+        "id": alert_id,
+        "status": "blocked",
+        "response": response,
+        "updated_at": now,
+    }
+    _security_save_json(SECURITY_ALERTS_DB, saved)
+
+    blocked = _security_load_json(SECURITY_BLOCKED_DB, [])
+    if not isinstance(blocked, list):
+        blocked = []
+
+    blocked.append({
+        "firewall_id": firewall_id,
+        "alert_id": alert_id,
+        "ip": source_ip,
+        "alias_name": alias_name,
+        "reason": body.reason,
+        "created_at": now,
+        "active": True,
+    })
+    _security_save_json(SECURITY_BLOCKED_DB, blocked)
+
+    return {
+        "ok": True,
+        "message": "차단 Alias에 IP를 추가했습니다.",
+        "alert_id": alert_id,
+        "source_ip": source_ip,
+        "alias_name": alias_name,
+        "result": result,
+        "apply": apply_result,
+    }
+
+
+@app.get("/api/firewalls/{firewall_id}/security-blocked-ips")
+def list_security_blocked_ips(firewall_id: int):
+    blocked = _security_load_json(SECURITY_BLOCKED_DB, [])
+    if not isinstance(blocked, list):
+        blocked = []
+
+    return {
+        "rows": [item for item in blocked if int(item.get("firewall_id", 0)) == firewall_id],
+    }

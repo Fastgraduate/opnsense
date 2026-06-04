@@ -12,6 +12,7 @@ import RulesPage from './pages/RulesPage'
 import OpnsenseFirewallLogsPage from './pages/OpnsenseFirewallLogsPage'
 import OpnsenseLogOverviewPage from './pages/OpnsenseLogOverviewPage'
 import FirewallInterfaceRulesPage from './pages/FirewallInterfaceRulesPage'
+import SecurityAlertsPage from './pages/SecurityAlertsPage'
 
 import { createMockFirewallEventLogs } from './mocks/mockFirewallEventLogs'
 
@@ -877,6 +878,10 @@ function App() {
             selectedFirewall={selectedFirewall}
             fetchOpnsenseLogs={fetchOpnsenseLogs}
           />
+        )}
+
+        {currentPage === 'securityAlerts' && (
+          <SecurityAlertsPage selectedFirewall={selectedFirewall} />
         )}
 
         {currentPage === 'firewalls' && (
