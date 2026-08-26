@@ -69,9 +69,10 @@ def main():
     print("[run_train] training Logistic Regression with TF-IDF only...")
     clf = LogisticRegression(
         max_iter=5000,
+        solver="liblinear",
         class_weight="balanced",
-        n_jobs=-1,
-        solver="saga",
+        C=0.5,
+        random_state=42,
     )
     clf.fit(X_train, train_p["label"])
 
