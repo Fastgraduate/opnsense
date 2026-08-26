@@ -22,13 +22,13 @@
     "Vulnerability_Scan": 0.1
   },
   "test_realistic_ratio": {
-    "Normal": 0.88,
-    "Cross_Site_Scripting": 0.02,
-    "HOST_Scan": 0.02,
-    "Path_Disclosure": 0.02,
-    "SQL_Injection": 0.02,
-    "System_Cmd_Execution": 0.02,
-    "Vulnerability_Scan": 0.02
+    "Normal": 0.8,
+    "Cross_Site_Scripting": 0.03,
+    "HOST_Scan": 0.03,
+    "Path_Disclosure": 0.03,
+    "SQL_Injection": 0.03,
+    "System_Cmd_Execution": 0.03,
+    "Vulnerability_Scan": 0.03
   },
   "tfidf": {
     "char_ngram_range": [
