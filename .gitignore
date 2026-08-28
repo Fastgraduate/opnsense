@@ -91,3 +91,6 @@ outputs/analysis/*
 !outputs/confusion/.gitkeep
 !outputs/error_analysis/.gitkeep
 !outputs/analysis/.gitkeep
+
+ml/out/*.csv
+ml.zip
