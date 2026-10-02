@@ -329,10 +329,9 @@ http://localhost:5173 에서 접속한 뒤 **방화벽 관리** 메뉴에서 장
 
 **Fastgraduate**
 
-<!-- TODO: 팀원과 담당 파트를 채워 주세요 -->
-
-| 이름 | GitHub | 담당 |
-| --- | --- | --- |
-| | [rudrb](https://github.com/rudrb) | |
-| | [persipica](https://github.com/persipica) | |
-| | | |
+| 이름 | GitHub |
+| --- | --- |
+| 최경규 | [rudrb](https://github.com/rudrb) | |
+| 강희수 | [persipica](https://github.com/persipica) | |
+| 김휘제| | |
+| 이창민| | |
