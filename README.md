@@ -334,4 +334,4 @@ http://localhost:5173 에서 접속한 뒤 **방화벽 관리** 메뉴에서 장
 | 최경규 | [rudrb](https://github.com/rudrb) | |
 | 강희수 | [persipica](https://github.com/persipica) | |
 | 김휘제| | |
-| 이창민| | |
+| 오창민| | |
