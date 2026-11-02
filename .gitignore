@@ -1,28 +1,65 @@
 # Python
 __pycache__/
-*.pyc
+*.py[cod]
 .venv/
 venv/
+.pytest_cache/
+
+# Node / frontend build
+node_modules/
+dist/
+build/
+.vite/
+coverage/
+
+# Environment files
 .env
+.env.*
+!.env.example
+!*.env.example
 
 # Local / sensitive backend files
 backend/.env
 backend/firewalls.json
-backend/data/firewalls.json.enc
+backend/data/
+
+# Authentication databases and keys
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.key
+*.pem
+registration_code.txt
+
+# Local block state, settings and event logs
+backend/manual_blocks.json
+backend/manual_response_config.json
+backend/security_alerts.json
+backend/security_automation_audit.jsonl
+backend/security_automation_settings.json
+*.log
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
 
 # Raw dataset zip
 202506_web_data_set.Zip
 
 # =========================
-# ML data - root ml folder case
-# 기준: repo root에 .gitignore가 있고, ML 코드가 ml/ 폴더 안에 있는 경우
+# ML data - root ml folder
 # =========================
 
 ml/data/raw/*
 ml/data/interim/*
 ml/data/processed/*
 
-# external은 기본적으로 무시하되, 필요한 보강 데이터셋 하나만 추적
+# Keep approved augmentation dataset
 ml/data/external/*
 !ml/data/external/
 !ml/data/external/.gitkeep
@@ -54,15 +91,14 @@ ml/outputs/analysis/*
 !ml/outputs/analysis/.gitkeep
 
 # =========================
-# ML data - current ml directory case
-# 기준: .gitignore가 ml/ 폴더 안에 있는 경우
+# ML data - current directory
 # =========================
 
 data/raw/*
 data/interim/*
 data/processed/*
 
-# external은 기본적으로 무시하되, 필요한 보강 데이터셋 하나만 추적
+# Keep approved augmentation dataset
 data/external/*
 !data/external/.gitkeep
 !data/external/http_params_train_only_for_augmentation.csv

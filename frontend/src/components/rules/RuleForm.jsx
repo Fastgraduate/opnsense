@@ -1,3 +1,4 @@
+import { twc } from "../../lib/twc";
 function RuleForm({
   form,
   showAdvanced,
@@ -5,28 +6,21 @@ function RuleForm({
   submitting,
   handleChange,
   handleAddRule,
-  resetForm,
+  resetForm
 }) {
-  return (
-    <div className="card form-card">
-      <div className="section-header">
+  return <div className={twc("card form-card")}>
+      <div className={twc("section-header")}>
         <h3>➕ 룰 추가</h3>
-        <button type="button" onClick={() => setShowAdvanced((prev) => !prev)}>
+        <button type="button" onClick={() => setShowAdvanced(prev => !prev)}>
           {showAdvanced ? '고급 옵션 숨기기' : '고급 옵션 보기'}
         </button>
       </div>
 
       <form onSubmit={handleAddRule}>
-        <div className="form-grid">
+        <div className={twc("form-grid")}>
           <div>
             <label>설명</label>
-            <input
-              name="description"
-              value={form.description}
-              onChange={handleChange}
-              placeholder="예: dashboard block test"
-              required
-            />
+            <input name="description" value={form.description} onChange={handleChange} placeholder="예: dashboard block test" required />
           </div>
 
           <div>
@@ -39,11 +33,7 @@ function RuleForm({
 
           <div>
             <label>인터페이스</label>
-            <select
-              name="interface"
-              value={form.interface}
-              onChange={handleChange}
-            >
+            <select name="interface" value={form.interface} onChange={handleChange}>
               <option value="lan">LAN</option>
               <option value="wan">WAN</option>
             </select>
@@ -51,11 +41,7 @@ function RuleForm({
 
           <div>
             <label>방향</label>
-            <select
-              name="direction"
-              value={form.direction}
-              onChange={handleChange}
-            >
+            <select name="direction" value={form.direction} onChange={handleChange}>
               <option value="in">IN</option>
               <option value="out">OUT</option>
             </select>
@@ -63,11 +49,7 @@ function RuleForm({
 
           <div>
             <label>프로토콜</label>
-            <select
-              name="protocol"
-              value={form.protocol}
-              onChange={handleChange}
-            >
+            <select name="protocol" value={form.protocol} onChange={handleChange}>
               <option value="TCP">TCP</option>
               <option value="UDP">UDP</option>
               <option value="TCP/UDP">TCP/UDP</option>
@@ -78,56 +60,31 @@ function RuleForm({
 
           <div>
             <label>출발지 IP / 네트워크</label>
-            <input
-              name="sourceNet"
-              value={form.sourceNet}
-              onChange={handleChange}
-              placeholder="any 또는 192.168.1.100"
-            />
+            <input name="sourceNet" value={form.sourceNet} onChange={handleChange} placeholder="any 또는 192.168.1.100" />
           </div>
 
           <div>
             <label>출발지 포트</label>
-            <input
-              name="sourcePort"
-              value={form.sourcePort}
-              onChange={handleChange}
-              placeholder="비워두면 전체"
-            />
+            <input name="sourcePort" value={form.sourcePort} onChange={handleChange} placeholder="비워두면 전체" />
           </div>
 
           <div>
             <label>목적지 IP / 네트워크</label>
-            <input
-              name="destinationNet"
-              value={form.destinationNet}
-              onChange={handleChange}
-              placeholder="any 또는 192.168.44.1"
-            />
+            <input name="destinationNet" value={form.destinationNet} onChange={handleChange} placeholder="any 또는 192.168.44.1" />
           </div>
 
           <div>
             <label>목적지 포트</label>
-            <input
-              name="destinationPort"
-              value={form.destinationPort}
-              onChange={handleChange}
-              placeholder="예: 80, 443"
-            />
+            <input name="destinationPort" value={form.destinationPort} onChange={handleChange} placeholder="예: 80, 443" />
           </div>
         </div>
 
-        {showAdvanced && (
-          <div className="advanced-box">
+        {showAdvanced && <div className={twc("advanced-box")}>
             <h4>고급 설정</h4>
-            <div className="form-grid">
+            <div className={twc("form-grid")}>
               <div>
                 <label>활성화 여부</label>
-                <select
-                  name="enabled"
-                  value={form.enabled}
-                  onChange={handleChange}
-                >
+                <select name="enabled" value={form.enabled} onChange={handleChange}>
                   <option value="1">활성화</option>
                   <option value="0">비활성화</option>
                 </select>
@@ -141,22 +98,16 @@ function RuleForm({
                 </select>
               </div>
 
-              <div className="checkbox-block">
-                <label className="checkbox-inline">
-                  <input
-                    type="checkbox"
-                    name="log"
-                    checked={form.log}
-                    onChange={handleChange}
-                  />
+              <div className={twc("checkbox-block")}>
+                <label className={twc("checkbox-inline")}>
+                  <input type="checkbox" name="log" checked={form.log} onChange={handleChange} />
                   로그 기록
                 </label>
               </div>
             </div>
-          </div>
-        )}
+          </div>}
 
-        <div className="form-actions">
+        <div className={twc("form-actions")}>
           <button type="submit" disabled={submitting}>
             {submitting ? '추가 중...' : '🚀 룰 추가'}
           </button>
@@ -165,8 +116,6 @@ function RuleForm({
           </button>
         </div>
       </form>
-    </div>
-  )
+    </div>;
 }
-
-export default RuleForm
+export default RuleForm;

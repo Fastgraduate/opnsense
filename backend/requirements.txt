@@ -2,3 +2,13 @@ fastapi
 uvicorn
 python-dotenv
 requests
+beautifulsoup4
+cryptography
+numpy
+pandas
+scikit-learn
+joblib
+scipy
+
+pyotp==2.9.0
+qrcode==8.2

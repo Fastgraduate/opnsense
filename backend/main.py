@@ -1,8 +1,12 @@
 import json
+import csv
+import base64
 import os
 import re
 import html
 import time
+import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import quote, urljoin
@@ -12,9 +16,20 @@ import urllib3
 from bs4 import BeautifulSoup
 from cryptography.fernet import Fernet
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+
+try:
+    from .manual_response import ManualResponse, ResponseError, contents
+    from .elk_results import decorate, is_attack
+    from .ml_v32_service import model_status as ml_model_status, predict_event as ml_predict_event
+    from .ml_elk_pipeline import pipeline_config as ml_pipeline_config, pipeline_diagnostics, run_pipeline_batch
+except ImportError:
+    from manual_response import ManualResponse, ResponseError, contents
+    from elk_results import decorate, is_attack
+    from ml_v32_service import model_status as ml_model_status, predict_event as ml_predict_event
+    from ml_elk_pipeline import pipeline_config as ml_pipeline_config, pipeline_diagnostics, run_pipeline_batch
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
@@ -51,17 +66,20 @@ if not OPNSENSE_VERIFY_SSL or not ELASTIC_VERIFY_SSL:
 FIREWALLS_FILE = BASE_DIR / "firewalls.json"
 
 app = FastAPI(title="Multi Firewall Dashboard Backend")
+try:
+    from .auth import install_auth
+except ImportError:
+    from auth import install_auth
+
+AUTH_ALLOWED_ORIGINS = [value.strip().rstrip('/') for value in os.getenv(
+    'AUTH_ALLOWED_ORIGINS',
+    'http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173'
+).split(',') if value.strip()]
+install_auth(app, BASE_DIR, AUTH_ALLOWED_ORIGINS)
+# CORS must be outside authentication so error responses also carry CORS headers.
 app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    CORSMiddleware, allow_origins=AUTH_ALLOWED_ORIGINS,
+    allow_credentials=True, allow_methods=['*'], allow_headers=['*'],
 )
 
 
@@ -75,6 +93,7 @@ class FirewallCreateBody(BaseModel):
     api_secret: str = Field(min_length=1)
     verify_ssl: bool = False
     log_index: str = "logs-suricata.eve-*"
+    event_log_index: str = "opnsense-firewall-*"
     description: str = ""
     elastic_url: str = ""
     elastic_api_key: str = ""
@@ -90,6 +109,7 @@ class FirewallUpdateBody(BaseModel):
     api_secret: Optional[str] = None
     verify_ssl: Optional[bool] = None
     log_index: Optional[str] = None
+    event_log_index: Optional[str] = None
     description: Optional[str] = None
     elastic_url: Optional[str] = None
     elastic_api_key: Optional[str] = None
@@ -118,6 +138,9 @@ class EventLogsQueryBody(BaseModel):
     minutes: int = 60
     action: str = ""
     interface: str = ""
+    protocol: str = ""
+    source: str = ""
+    destination: str = ""
     query: str = ""
 
 
@@ -127,12 +150,41 @@ class OpnsenseLogFilter(BaseModel):
     operator: Optional[str] = "contains"
     tableSize: Optional[int] = 25
     historySize: Optional[int] = 300
+    # Legacy full-archive mode kept for compatibility.
+    fetchAll: Optional[bool] = False
+    pageSize: Optional[int] = 500
+    maxRows: Optional[int] = 50000
     resolveHostnames: Optional[bool] = False
     onlyImportant: Optional[bool] = False
+    # Optimized server-side view. The browser only receives one page while the
+    # backend keeps a short-lived archive cache for the selected time range.
+    serverView: Optional[bool] = False
+    minutes: Optional[int] = 60
+    page: Optional[int] = 1
+    includeHistogram: Optional[bool] = True
+    protocol: Optional[str] = ""
+    source: Optional[str] = ""
+    destination: Optional[str] = ""
+    interface: Optional[str] = ""
+    action: Optional[str] = ""
+    forceRefresh: Optional[bool] = False
+    fromMs: Optional[int] = None
+    toMs: Optional[int] = None
 
 
 class AliasAddressBody(BaseModel):
     address: str
+
+
+class MlPipelineRunBody(BaseModel):
+    batch_size: int = 100
+    lookback_minutes: int = 180
+    force: bool = False
+
+
+class MlPredictBody(BaseModel):
+    payload: str
+    flow: Optional[Dict[str, Any]] = None
 
 
 # =========================
@@ -182,6 +234,7 @@ def serialize_firewall(item: Dict[str, Any]) -> Dict[str, Any]:
         "host": item["host"],
         "verify_ssl": item.get("verify_ssl", OPNSENSE_VERIFY_SSL),
         "log_index": item.get("log_index", "logs-suricata.eve-*"),
+        "event_log_index": item.get("event_log_index", ""),
         "description": item.get("description", ""),
         "has_secret": bool(item.get("api_key_enc") and item.get("api_secret_enc")),
         "elastic": {
@@ -235,7 +288,7 @@ def opnsense_request(
             auth=(api_key, api_secret),
             json=json_data,
             verify=verify_ssl,
-            timeout=OPNSENSE_TIMEOUT,
+            timeout=(5, OPNSENSE_TIMEOUT),
             headers=headers,
         )
     except requests.exceptions.ConnectTimeout:
@@ -517,46 +570,68 @@ def _elastic_verify_ssl(target: Dict[str, Any]) -> bool:
     return ELASTIC_VERIFY_SSL
 
 
+def _decrypt_optional(token: Any) -> str:
+    if not token:
+        return ""
+    try:
+        return decrypt_text(str(token))
+    except Exception:
+        return ""
+
+
+def _has_target_elastic_basic_auth(target: Dict[str, Any]) -> bool:
+    """
+    개별 방화벽에 Elastic username/password가 저장되어 있으면
+    글로벌 ELASTIC_API_KEY보다 해당 방화벽의 Basic 인증을 우선한다.
+
+    기존 구현은 firewall별 API key가 비어 있으면 .env의 글로벌 API key를
+    먼저 사용해서, 팀 ELK의 username/password가 무시될 수 있었다.
+    """
+    return bool(
+        str(target.get("elastic_username") or "").strip()
+        or target.get("elastic_password_enc")
+    )
+
+
 def elastic_headers(target: Dict[str, Any]) -> Dict[str, str]:
     headers = {"Content-Type": "application/json"}
 
-    api_key_enc = target.get("elastic_api_key_enc")
-    api_key = ""
-    if api_key_enc:
-        try:
-            api_key = decrypt_text(api_key_enc)
-        except Exception:
-            api_key = ""
+    # 1) 방화벽별 API key가 있으면 최우선.
+    target_api_key = _decrypt_optional(target.get("elastic_api_key_enc"))
+    if target_api_key:
+        headers["Authorization"] = f"ApiKey {target_api_key}"
+        return headers
 
-    if not api_key:
-        api_key = ELASTIC_API_KEY
+    # 2) 방화벽별 Basic 인증이 설정되어 있으면 글로벌 API key를 섞지 않는다.
+    if _has_target_elastic_basic_auth(target):
+        return headers
 
-    if api_key:
-        headers["Authorization"] = f"ApiKey {api_key}"
+    # 3) 개별 인증 설정이 전혀 없을 때만 글로벌 API key fallback.
+    if ELASTIC_API_KEY:
+        headers["Authorization"] = f"ApiKey {ELASTIC_API_KEY}"
 
     return headers
 
 
 def elastic_auth(target: Dict[str, Any]):
-    headers = elastic_headers(target)
-    if headers.get("Authorization"):
+    # 방화벽별 API key가 있으면 requests auth는 사용하지 않는다.
+    if _decrypt_optional(target.get("elastic_api_key_enc")):
         return None
 
-    username = str(target.get("elastic_username") or ELASTIC_USERNAME).strip()
-    password_enc = target.get("elastic_password_enc")
-    password = ""
+    # 방화벽별 Basic 인증을 글로벌 인증보다 우선한다.
+    target_username = str(target.get("elastic_username") or "").strip()
+    target_password = _decrypt_optional(target.get("elastic_password_enc"))
+    if target_username or target.get("elastic_password_enc"):
+        if target_username and target_password:
+            return (target_username, target_password)
+        return None
 
-    if password_enc:
-        try:
-            password = decrypt_text(password_enc)
-        except Exception:
-            password = ""
+    # 개별 인증이 없고 글로벌 API key가 있으면 Authorization header 사용.
+    if ELASTIC_API_KEY:
+        return None
 
-    if not password:
-        password = ELASTIC_PASSWORD
-
-    if username and password:
-        return (username, password)
+    if ELASTIC_USERNAME and ELASTIC_PASSWORD:
+        return (ELASTIC_USERNAME, ELASTIC_PASSWORD)
 
     return None
 
@@ -639,6 +714,143 @@ def build_kibana_export_row(hit: Dict[str, Any], src: Dict[str, Any]) -> Dict[st
         "message": src.get("message", ""),
     }
 
+
+def _elastic_field_value(value: Any, default: Any = "") -> Any:
+    if value is None:
+        return default
+    if isinstance(value, list):
+        return value[0] if value else default
+    return value
+
+
+def _elastic_fields_to_source(fields: Dict[str, Any]) -> Dict[str, Any]:
+    result: Dict[str, Any] = {}
+    if not isinstance(fields, dict):
+        return result
+
+    for dotted_key, raw_value in fields.items():
+        key_text = str(dotted_key)
+        if key_text.endswith(".keyword"):
+            continue
+
+        value = _elastic_field_value(raw_value, "")
+        cur = result
+        parts = key_text.split(".")
+
+        for part in parts[:-1]:
+            if part not in cur or not isinstance(cur.get(part), dict):
+                cur[part] = {}
+            cur = cur[part]
+
+        cur[parts[-1]] = value
+
+    return result
+
+
+def _read_elastic_value(src: Dict[str, Any], path: str, default: Any = "") -> Any:
+    value = get_nested(src, path, None)
+    if value is None and isinstance(src, dict):
+        value = src.get(path, default)
+    return _elastic_field_value(value, default)
+
+
+def parse_opnsense_filterlog_message(message: Any) -> Dict[str, Any]:
+    text = str(message or "").strip()
+    if not text:
+        return {}
+
+    result: Dict[str, Any] = {"message": text}
+
+    header_match = re.search(
+        r"^(?:<(?P<pri>\d+)>)?(?P<syslog_time>[A-Z][a-z]{2}\s+\d+\s+\d{2}:\d{2}:\d{2})\s+"
+        r"(?P<host>\S+)\s+(?P<program>[A-Za-z0-9_.-]+)(?:\[(?P<pid>\d+)\])?:\s*(?P<body>.*)$",
+        text,
+    )
+
+    if header_match:
+        result.update({
+            "syslog_priority": header_match.group("pri") or "-",
+            "syslog_time": header_match.group("syslog_time") or "-",
+            "host": header_match.group("host") or "-",
+            "program": header_match.group("program") or "-",
+            "pid": header_match.group("pid") or "-",
+        })
+        body = header_match.group("body") or ""
+    else:
+        body = text
+
+    program = str(result.get("program", "")).lower()
+
+    if "filterlog" in program:
+        try:
+            parts = next(csv.reader([body]))
+        except Exception:
+            parts = body.split(",")
+
+        parts = [str(x).strip() for x in parts]
+
+        def p(index: int, default: str = "-") -> str:
+            return parts[index] if index < len(parts) and parts[index] != "" else default
+
+        result.update({
+            "event_type": "filterlog",
+            "event_action": p(6),
+            "action": p(6),
+            "interface": p(4),
+            "reason": p(5),
+            "direction": p(7),
+            "ip_version": p(8),
+            "protocol_id": p(15),
+            "protocol": p(16),
+            "packet_length": p(17),
+            "source_ip": p(18),
+            "destination_ip": p(19),
+            "source_port": p(20, ""),
+            "destination_port": p(21, ""),
+            "rule": f"filterlog rule {p(0)}",
+            "tracker": p(3),
+            "category": "opnsense firewall",
+            "severity": "-",
+            "raw_parts": parts,
+        })
+        return result
+
+    if "audit" in program or "authenticate" in body.lower():
+        severity = "2" if "could not authenticate" in body.lower() or "failed" in body.lower() else "-"
+        result.update({
+            "event_type": "auth",
+            "event_action": "auth",
+            "action": "auth",
+            "interface": "WebGui" if "webgui" in body.lower() else "-",
+            "protocol": "https" if "webgui" in body.lower() else "-",
+            "source_ip": "-",
+            "destination_ip": "-",
+            "source_port": "",
+            "destination_port": "",
+            "rule": body or "OPNsense authentication log",
+            "category": "opnsense auth",
+            "severity": severity,
+        })
+        return result
+
+    result.update({
+        "event_type": program or "opnsense",
+        "event_action": program or "opnsense",
+        "action": program or "opnsense",
+        "interface": "-",
+        "protocol": "-",
+        "source_ip": "-",
+        "destination_ip": "-",
+        "source_port": "",
+        "destination_port": "",
+        "rule": body or text,
+        "category": "opnsense syslog",
+        "severity": "-",
+    })
+    return result
+
+
+
 def search_firewall_events(
     target: Dict[str, Any],
     log_index: str,
@@ -647,11 +859,26 @@ def search_firewall_events(
     action: str = "",
     interface: str = "",
     query_text: str = "",
+    before_timestamp: str = "",
 ) -> List[Dict[str, Any]]:
     ensure_elastic_config(target)
 
     must: List[Dict[str, Any]] = []
+    filter_conditions: List[Dict[str, Any]] = []
 
+    safe_minutes = max(1, int(minutes or 60))
+    before_timestamp = str(before_timestamp or "").strip()
+    timestamp_range: Dict[str, Any] = {}
+    if safe_minutes < 5256000:
+        timestamp_range["gte"] = f"now-{safe_minutes}m"
+    if before_timestamp:
+        timestamp_range["lte"] = before_timestamp
+    elif safe_minutes < 5256000:
+        timestamp_range["lte"] = "now"
+    if timestamp_range:
+        filter_conditions.append({"range": {"@timestamp": timestamp_range}})
+
+    action = (action or "").strip()
     if action:
         must.append({
             "bool": {
@@ -659,11 +886,16 @@ def search_firewall_events(
                     {"term": {"network.direction.keyword": action}},
                     {"term": {"suricata.eve.event_type.keyword": action}},
                     {"term": {"event.action.keyword": action}},
+                    {"term": {"event.type.keyword": action}},
+                    {"term": {"type.keyword": action}},
+                    {"match_phrase": {"message": action}},
+                    {"match_phrase": {"event.original": action}},
                 ],
                 "minimum_should_match": 1,
             }
         })
 
+    interface = (interface or "").strip()
     if interface:
         must.append({
             "bool": {
@@ -671,38 +903,82 @@ def search_firewall_events(
                     {"term": {"suricata.eve.in_iface.keyword": interface}},
                     {"term": {"observer.ingress.interface.name.keyword": interface}},
                     {"term": {"observer.egress.interface.name.keyword": interface}},
+                    {"match_phrase": {"message": f",{interface},"}},
+                    {"match_phrase": {"event.original": f",{interface},"}},
+                    {"match_phrase": {"message": interface}},
+                    {"match_phrase": {"event.original": interface}},
                 ],
                 "minimum_should_match": 1,
             }
         })
 
+    query_text = (query_text or "").strip()
     if query_text:
         must.append({
             "multi_match": {
                 "query": query_text,
                 "fields": [
+                    "ml.detected_class",
+                    "ml.confidence_percent",
+                    "ml.risk_level",
+                    "final_risk",
+                    "main_result_display",
+                    "ml.main_result_display",
+                    "ml_result.main_result_display",
+                    "final_pred",
                     "source.ip",
                     "destination.ip",
                     "network.transport",
                     "network.direction",
                     "suricata.eve.event_type",
-                    "suricata.eve.app_proto",
                     "suricata.eve.in_iface",
                     "suricata.eve.alert.signature",
-                    "suricata.eve.alert.category",
                     "event.dataset",
+                    "event.module",
+                    "event.type",
+                    "event.action",
                     "event.original",
                     "message",
                     "host.name",
-                    "host.hostname",
+                    "type",
                 ],
+                "lenient": True,
             }
         })
 
+    bool_query: Dict[str, Any] = {}
+    if must:
+        bool_query["must"] = must
+    if filter_conditions:
+        bool_query["filter"] = filter_conditions
+
     body = {
-        "size": size,
+        "size": max(1, min(int(size or 200), 1000)),
         "sort": [{"@timestamp": {"order": "desc"}}],
-        "query": {"bool": {"must": must}} if must else {"match_all": {}},
+        "_source": True,
+        "fields": [
+            "@timestamp",
+            "event.original",
+            "event.created",
+            "event.dataset",
+            "event.module",
+            "event.type",
+            "event.action",
+            "message",
+            "type",
+            "host.name",
+            "source.ip",
+            "source.port",
+            "ml.detected_class",
+            "ml.confidence_percent",
+            "ml.risk_level",
+            "final_risk",
+            "destination.ip",
+            "destination.port",
+            "network.transport",
+            "suricata.eve.*",
+        ],
+        "query": {"bool": bool_query} if bool_query else {"match_all": {}},
     }
 
     try:
@@ -716,100 +992,161 @@ def search_firewall_events(
         )
         resp.raise_for_status()
     except requests.exceptions.ConnectTimeout:
-        raise HTTPException(status_code=504, detail="Elastic 연결 시간 초과")
+        raise HTTPException(
+            status_code=504,
+            detail=f"Elastic 연결 시간 초과: {_elastic_url(target)}",
+        )
     except requests.exceptions.ReadTimeout:
-        raise HTTPException(status_code=504, detail="Elastic 응답 시간 초과")
+        raise HTTPException(
+            status_code=504,
+            detail=f"Elastic 응답 시간 초과: {_elastic_url(target)}",
+        )
     except requests.exceptions.ConnectionError as e:
         raise HTTPException(status_code=502, detail=f"Elastic 연결 실패: {e}")
     except requests.exceptions.RequestException as e:
-        raise HTTPException(status_code=500, detail=f"Elastic 요청 실패: {e}")
+        error_text = ""
+        try:
+            error_text = resp.text
+        except Exception:
+            error_text = str(e)
+        raise HTTPException(status_code=500, detail=f"Elastic 요청 실패: {e} / {error_text}")
 
     payload = resp.json()
     hits = payload.get("hits", {}).get("hits", [])
 
     rows: List[Dict[str, Any]] = []
 
-    for hit in hits:
-        src = hit.get("_source", {})
-        message_json = parse_suricata_message(src.get("message", ""))
+    for index, hit in enumerate(hits):
+        source_from_fields = _elastic_fields_to_source(hit.get("fields", {}))
+        src = hit.get("_source") if isinstance(hit.get("_source"), dict) else {}
+        src = {**source_from_fields, **src}
+
+        message_value = (
+            _read_elastic_value(src, "message", "")
+            or _read_elastic_value(src, "event.original", "")
+            or ""
+        )
+        event_original = _read_elastic_value(src, "event.original", message_value)
+
+        message_json = parse_suricata_message(message_value)
+        if not message_json and event_original:
+            message_json = parse_suricata_message(event_original)
+
+        opnsense_parsed = parse_opnsense_filterlog_message(event_original or message_value)
 
         event_type = (
-            get_nested(src, "suricata.eve.event_type")
-            or get_nested(src, "event.type")
+            _read_elastic_value(src, "suricata.eve.event_type", "")
+            or _read_elastic_value(src, "event.type", "")
+            or _read_elastic_value(src, "event.action", "")
             or message_json.get("event_type")
+            or opnsense_parsed.get("event_type")
+            or _read_elastic_value(src, "type", "")
             or "-"
         )
 
         action_value = (
-            get_nested(src, "network.direction")
-            or get_nested(src, "event.action")
+            _read_elastic_value(src, "network.direction", "")
+            or _read_elastic_value(src, "event.action", "")
             or message_json.get("event_type")
+            or opnsense_parsed.get("action")
             or event_type
             or "-"
         )
 
         interface_value = (
-            get_nested(src, "suricata.eve.in_iface")
-            or get_nested(src, "observer.ingress.interface.name")
-            or get_nested(src, "observer.egress.interface.name")
+            _read_elastic_value(src, "suricata.eve.in_iface", "")
+            or _read_elastic_value(src, "observer.ingress.interface.name", "")
+            or _read_elastic_value(src, "observer.egress.interface.name", "")
             or message_json.get("in_iface")
+            or opnsense_parsed.get("interface")
             or "-"
         )
 
         protocol_value = (
-            get_nested(src, "network.transport")
-            or get_nested(src, "network.protocol")
-            or get_nested(src, "suricata.eve.proto")
+            _read_elastic_value(src, "network.transport", "")
+            or _read_elastic_value(src, "network.protocol", "")
+            or _read_elastic_value(src, "suricata.eve.proto", "")
             or message_json.get("proto")
+            or opnsense_parsed.get("protocol")
             or "-"
         )
 
+        alert_signature_value = _read_elastic_value(src, "suricata.eve.alert.signature", "")
         rule_value = (
-            get_nested(src, "suricata.eve.alert.signature")
-            or get_nested(src, "rule.name")
+            alert_signature_value
+            or _read_elastic_value(src, "rule.name", "")
             or get_nested(message_json, "alert.signature")
+            or opnsense_parsed.get("rule")
             or event_type
             or "-"
         )
 
         severity_value = (
-            get_nested(src, "suricata.eve.alert.severity")
-            or get_nested(src, "event.severity")
+            _read_elastic_value(src, "suricata.eve.alert.severity", "")
+            or _read_elastic_value(src, "event.severity", "")
             or get_nested(message_json, "alert.severity")
+            or opnsense_parsed.get("severity")
             or "-"
         )
 
         category_value = (
-            get_nested(src, "suricata.eve.alert.category")
-            or get_nested(src, "event.category")
-            or get_nested(src, "event.dataset")
+            _read_elastic_value(src, "suricata.eve.alert.category", "")
+            or _read_elastic_value(src, "event.category", "")
+            or _read_elastic_value(src, "event.dataset", "")
             or get_nested(message_json, "alert.category")
+            or opnsense_parsed.get("category")
             or "-"
         )
 
         host_value = (
-            get_nested(src, "host.name")
-            or get_nested(src, "host.hostname")
+            _read_elastic_value(src, "host.name", "")
+            or _read_elastic_value(src, "host.hostname", "")
+            or opnsense_parsed.get("host")
             or "-"
         )
 
+        timestamp_value = _read_elastic_value(src, "@timestamp", "-")
+        ml_detected_class = _read_elastic_value(src, "ml.detected_class", "")
+        ml_confidence_percent = _read_elastic_value(src, "ml.confidence_percent", "")
+        ml_risk_level = _read_elastic_value(src, "ml.risk_level", "")
+        final_risk_value = _read_elastic_value(src, "final_risk", "")
+        document_id = hit.get("_id", f"event-{index}")
+
         rows.append({
-            "id": hit.get("_id"),
-            "timestamp": src.get("@timestamp", "-"),
+            "id": f"{document_id}-{timestamp_value}-{index}",
+            "_id": document_id,
+            "_index": hit.get("_index", ""),
+            "_score": hit.get("_score", ""),
+            "timestamp": timestamp_value,
+            "event_created": _read_elastic_value(src, "event.created", "-"),
+            "event_dataset": _read_elastic_value(src, "event.dataset", opnsense_parsed.get("category", "-")),
+            "event_module": _read_elastic_value(src, "event.module", opnsense_parsed.get("program", "-")),
+            "event_original": event_original,
+            "type": _read_elastic_value(src, "type", "-"),
             "action": action_value,
             "interface": interface_value,
+            "direction": opnsense_parsed.get("direction", "-"),
+            "reason": opnsense_parsed.get("reason", "-"),
             "protocol": protocol_value,
-            "source_ip": get_nested(src, "source.ip", message_json.get("src_ip", "-")),
-            "source_port": get_nested(src, "source.port", message_json.get("src_port", "-")),
-            "destination_ip": get_nested(src, "destination.ip", message_json.get("dest_ip", "-")),
-            "destination_port": get_nested(src, "destination.port", message_json.get("dest_port", "-")),
+            "source_ip": _read_elastic_value(src, "source.ip", message_json.get("src_ip", opnsense_parsed.get("source_ip", "-"))),
+            "source_port": _read_elastic_value(src, "source.port", message_json.get("src_port", opnsense_parsed.get("source_port", ""))),
+            "destination_ip": _read_elastic_value(src, "destination.ip", message_json.get("dest_ip", opnsense_parsed.get("destination_ip", "-"))),
+            "destination_port": _read_elastic_value(src, "destination.port", message_json.get("dest_port", opnsense_parsed.get("destination_port", ""))),
             "rule": rule_value,
+            "alert_signature": alert_signature_value,
             "severity": severity_value,
             "category": category_value,
             "host": host_value,
             "event_type": event_type,
+            # Canonical fields written by the Logstash V32 inference pipeline.
+            "ml_detected_class": ml_detected_class,
+            "ml_confidence_percent": ml_confidence_percent,
+            "ml_risk_level": ml_risk_level,
+            "final_risk": final_risk_value,
+            "message": message_value or event_original,
             "raw": src,
             "messageJson": message_json,
+            "opnsenseParsed": opnsense_parsed,
             "exportRow": build_kibana_export_row(hit, src),
         })
 
@@ -849,6 +1186,7 @@ def create_firewall(body: FirewallCreateBody):
         "api_secret_enc": encrypt_text(body.api_secret.strip()),
         "verify_ssl": body.verify_ssl,
         "log_index": body.log_index.strip() or "logs-suricata.eve-*",
+        "event_log_index": body.event_log_index.strip(),
         "description": body.description.strip(),
         "elastic_url": body.elastic_url.strip().rstrip("/"),
         "elastic_api_key_enc": encrypt_text(body.elastic_api_key.strip()) if body.elastic_api_key.strip() else "",
@@ -885,6 +1223,8 @@ def update_firewall(firewall_id: int, body: FirewallUpdateBody):
             item["verify_ssl"] = body.verify_ssl
         if body.log_index is not None:
             item["log_index"] = body.log_index.strip() or "logs-suricata.eve-*"
+        if body.event_log_index is not None:
+            item["event_log_index"] = body.event_log_index.strip()
         if body.description is not None:
             item["description"] = body.description.strip()
         if body.elastic_url is not None:
@@ -925,6 +1265,90 @@ def delete_firewall(firewall_id: int):
 
     save_firewalls(next_items)
     return {"ok": True}
+
+
+
+def _probe_opnsense(target: Dict[str, Any]) -> Dict[str, Any]:
+    host = str(target.get("host", "")).strip().rstrip("/")
+    if not host:
+        return {"ok": False, "error": "OPNsense host 누락"}
+
+    url = f"{host}/api/core/firmware/status"
+    started = time.perf_counter()
+    try:
+        response = requests.post(
+            url,
+            auth=(
+                decrypt_text(target["api_key_enc"]),
+                decrypt_text(target["api_secret_enc"]),
+            ),
+            json={},
+            verify=bool(target.get("verify_ssl", OPNSENSE_VERIFY_SSL)),
+            timeout=(4, 8),
+        )
+        elapsed = round((time.perf_counter() - started) * 1000)
+        return {
+            "ok": response.ok,
+            "url": url,
+            "status": response.status_code,
+            "elapsed_ms": elapsed,
+            "message": "OPNsense reachable" if response.ok else "OPNsense responded with error",
+        }
+    except requests.exceptions.ConnectTimeout:
+        return {"ok": False, "url": url, "error": "connect timeout"}
+    except requests.exceptions.ReadTimeout:
+        return {"ok": False, "url": url, "error": "read timeout"}
+    except requests.exceptions.ConnectionError as exc:
+        return {"ok": False, "url": url, "error": f"connection error: {exc}"}
+    except Exception as exc:
+        return {"ok": False, "url": url, "error": str(exc)}
+
+
+def _probe_elastic(target: Dict[str, Any]) -> Dict[str, Any]:
+    base_url = _elastic_url(target)
+    if not base_url:
+        return {"ok": False, "error": "Elastic URL 누락"}
+
+    url = f"{base_url}/"
+    started = time.perf_counter()
+    try:
+        response = requests.get(
+            url,
+            headers=elastic_headers(target),
+            auth=elastic_auth(target),
+            verify=_elastic_verify_ssl(target),
+            timeout=(4, 8),
+        )
+        elapsed = round((time.perf_counter() - started) * 1000)
+        return {
+            "ok": response.ok,
+            "url": url,
+            "status": response.status_code,
+            "elapsed_ms": elapsed,
+            "message": "Elastic reachable" if response.ok else "Elastic responded with error",
+        }
+    except requests.exceptions.ConnectTimeout:
+        return {"ok": False, "url": url, "error": "connect timeout"}
+    except requests.exceptions.ReadTimeout:
+        return {"ok": False, "url": url, "error": "read timeout"}
+    except requests.exceptions.ConnectionError as exc:
+        return {"ok": False, "url": url, "error": f"connection error: {exc}"}
+    except Exception as exc:
+        return {"ok": False, "url": url, "error": str(exc)}
+
+
+@app.get("/api/firewalls/{firewall_id}/connectivity")
+def firewall_connectivity(firewall_id: int):
+    """
+    프론트와 무관하게 백엔드 PC 기준으로 OPNsense/Elastic 연결을 각각 검사한다.
+    200 응답 자체는 probe 실행 성공을 의미하며, 실제 연결 여부는 각 ok 필드로 확인한다.
+    """
+    target = get_firewall_or_404(firewall_id)
+    return {
+        "firewall": serialize_firewall(target),
+        "opnsense": _probe_opnsense(target),
+        "elastic": _probe_elastic(target),
+    }
 
 
 # =========================
@@ -1530,76 +1954,566 @@ def _opn_log_apply_filters(rows: List[Dict[str, Any]], filters: OpnsenseLogFilte
     return result
 
 
-@app.post("/api/firewalls/{firewall_id}/opnsense-logs")
-def get_opnsense_firewall_logs(firewall_id: int, filters: OpnsenseLogFilter):
-    target = get_firewall_or_404(firewall_id)
 
-    # 팀 프로젝트 장비처럼 로그가 많은 환경에서 브라우저 렉을 막기 위해 서버 단에서 강제 제한한다.
-    requested = filters.historySize or filters.tableSize or 100
-    row_count = max(1, min(int(requested), 300))
-    search_phrase = (filters.search or "").strip()
 
-    # OPNsense API에도 검색어를 넘기되, 최종 필터는 백엔드에서 한 번 더 수행한다.
-    candidate_requests = [
-        {
-            "method": "POST",
-            "path": "/api/diagnostics/firewall/log",
-            "json": {
-                "current": 1,
-                "rowCount": row_count,
-                "searchPhrase": search_phrase,
-                "sort": {},
-            },
-        },
-        {
-            "method": "POST",
-            "path": "/api/diagnostics/firewall/log/",
-            "json": {
-                "current": 1,
-                "rowCount": row_count,
-                "searchPhrase": search_phrase,
-                "sort": {},
-            },
-        },
-        {
-            "method": "GET",
-            "path": f"/api/diagnostics/firewall/log?limit={row_count}",
-            "json": None,
-        },
-    ]
+_OPN_VIEW_CACHE_LOCK = threading.Lock()
+# One progressive archive per firewall.  A selected 7-day/30-day range no longer
+# forces a synchronous page-by-page rescan.  The request returns the newest page
+# immediately and older OPNsense pages are backfilled in a daemon thread.
+_OPN_VIEW_CACHE: Dict[int, Dict[str, Any]] = {}
+_OPN_LATEST_REFRESH_SECONDS = 4
+_OPN_BACKFILL_PAGE_SIZE = 1000
+_OPN_INITIAL_ROWS = 100
+_OPN_ARCHIVE_MAX_ROWS = 200000
 
+
+def _log_timestamp_ms(value: Any) -> Optional[int]:
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)):
+        numeric_value = float(value)
+        return int(numeric_value * 1000 if numeric_value < 1e12 else numeric_value)
+    raw = str(value).strip()
+    if not raw or raw == "-":
+        return None
+    if re.fullmatch(r"\d+(?:\.\d+)?", raw):
+        numeric_value = float(raw)
+        return int(numeric_value * 1000 if numeric_value < 1e12 else numeric_value)
+    normalized = raw.replace(" ", "T")
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(normalized)
+        # OPNsense live-log ISO strings without an offset are UTC in the
+        # installations used by this dashboard.
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return int(parsed.timestamp() * 1000)
+    except ValueError:
+        return None
+
+
+def _native_row_identity(row: Dict[str, Any]) -> str:
+    raw = row.get("raw") if isinstance(row, dict) else None
+    return json.dumps([
+        row.get("time"), row.get("source"), row.get("destination"),
+        row.get("action"), row.get("protocol"), row.get("label"), raw,
+    ], ensure_ascii=False, sort_keys=True, default=str)
+
+
+def _fetch_opnsense_page(target: Dict[str, Any], page: int, page_size: int) -> List[Dict[str, Any]]:
+    data = opnsense_request(
+        target=target,
+        method="POST",
+        path="/api/diagnostics/firewall/log",
+        json_data={"current": page, "rowCount": page_size, "searchPhrase": "", "sort": {}},
+    )
+    raw_rows = _extract_log_rows_from_payload(data)
+    return [normalize_opnsense_log_row(raw_row, (page - 1) * page_size + index) for index, raw_row in enumerate(raw_rows)]
+
+
+def _fetch_opnsense_recent_snapshot(target: Dict[str, Any], limit: int = 100) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Fetch the newest OPNsense firewall log rows with API compatibility fallbacks.
+
+    Some OPNsense versions return an HTTP 200 but an empty payload for the
+    Bootgrid POST form while the GET live-log form returns rows normally.
+    The overview page already tolerated this; the lightweight serverView path
+    must do the same or it can incorrectly report 0 rows.
+    """
+    safe_limit = max(1, min(int(limit or 100), 1000))
     attempts: List[Dict[str, Any]] = []
 
-    for request_info in candidate_requests:
-        method = request_info["method"]
-        path = request_info["path"]
-
-        try:
-            data = opnsense_request(
-                target=target,
-                method=method,
-                path=path,
-                json_data=request_info.get("json"),
+    def normalize_rows(raw_rows: List[Any]) -> List[Dict[str, Any]]:
+        rows = [normalize_opnsense_log_row(raw, index) for index, raw in enumerate(raw_rows)]
+        return [
+            row for row in rows
+            if not (
+                row.get("interface") == "-"
+                and row.get("time") == "-"
+                and row.get("source") == "-"
+                and row.get("destination") == "-"
+                and row.get("label") == "-"
             )
+        ]
 
+    # Preferred form on newer installations.
+    try:
+        path = "/api/diagnostics/firewall/log"
+        data = opnsense_request(
+            target=target,
+            method="POST",
+            path=path,
+            json_data={"current": 1, "rowCount": safe_limit, "searchPhrase": "", "sort": {}},
+        )
+        raw_rows = _extract_log_rows_from_payload(data)
+        rows = normalize_rows(raw_rows)
+        attempts.append({
+            "method": "POST",
+            "path": path,
+            "ok": True,
+            "found_rows": len(raw_rows),
+            "usable_rows": len(rows),
+            "response_type": type(data).__name__,
+            "response_keys": list(data.keys()) if isinstance(data, dict) else [],
+        })
+        if rows:
+            return rows[:safe_limit], attempts
+    except HTTPException as exc:
+        attempts.append({"method": "POST", "path": "/api/diagnostics/firewall/log", "ok": False, "error": exc.detail})
+    except Exception as exc:
+        attempts.append({"method": "POST", "path": "/api/diagnostics/firewall/log", "ok": False, "error": str(exc)})
+
+    # Compatibility form used successfully by older/current OPNsense builds.
+    for path in (
+        f"/api/diagnostics/firewall/log?limit={safe_limit}",
+        "/api/diagnostics/firewall/log",
+    ):
+        try:
+            data = opnsense_request(target=target, method="GET", path=path, json_data=None)
             raw_rows = _extract_log_rows_from_payload(data)
-
+            rows = normalize_rows(raw_rows)
             attempts.append({
-                "method": method,
+                "method": "GET",
                 "path": path,
                 "ok": True,
                 "found_rows": len(raw_rows),
-                "requested_limit": row_count,
+                "usable_rows": len(rows),
+                "response_type": type(data).__name__,
+                "response_keys": list(data.keys()) if isinstance(data, dict) else [],
+            })
+            if rows:
+                return rows[:safe_limit], attempts
+        except HTTPException as exc:
+            attempts.append({"method": "GET", "path": path, "ok": False, "error": exc.detail})
+        except Exception as exc:
+            attempts.append({"method": "GET", "path": path, "ok": False, "error": str(exc)})
+
+    return [], attempts
+
+
+def _new_opn_archive_entry(target: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "target_host": str(target.get("host", "")),
+        "rows": [],
+        "seen": set(),
+        "scan_page": 1,
+        "scan_complete": False,
+        "loading": False,
+        "requested_cutoff_ms": int(time.time() * 1000) - 60 * 60 * 1000,
+        "last_latest_refresh": 0.0,
+        "last_backfill_at": 0.0,
+        "pages_loaded": 0,
+        "error": "",
+    }
+
+
+def _opn_entry_merge_rows(entry: Dict[str, Any], rows: List[Dict[str, Any]], newest: bool = False) -> int:
+    """Merge rows while keeping the archive newest-first and deduplicated."""
+    seen = entry.setdefault("seen", set())
+    accepted: List[Dict[str, Any]] = []
+    for row in rows:
+        if (
+            row.get("interface") == "-" and row.get("time") == "-"
+            and row.get("source") == "-" and row.get("destination") == "-"
+            and row.get("label") == "-"
+        ):
+            continue
+        identity = _native_row_identity(row)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        accepted.append(row)
+
+    if not accepted:
+        return 0
+
+    accepted.sort(key=lambda row: _log_timestamp_ms(row.get("time")) or 0, reverse=True)
+    current = entry.setdefault("rows", [])
+    if newest:
+        # Latest page may overlap the archive.  Sort only the small newly merged
+        # head plus current rows so real-time additions appear immediately.
+        entry["rows"] = sorted(
+            accepted + current,
+            key=lambda row: _log_timestamp_ms(row.get("time")) or 0,
+            reverse=True,
+        )[:_OPN_ARCHIVE_MAX_ROWS]
+    else:
+        # Backfill pages are newest -> oldest, so appending avoids repeatedly
+        # sorting tens of thousands of rows.
+        current.extend(accepted)
+        if len(current) > _OPN_ARCHIVE_MAX_ROWS:
+            del current[_OPN_ARCHIVE_MAX_ROWS:]
+    return len(accepted)
+
+
+def _opn_oldest_ms(entry: Dict[str, Any]) -> Optional[int]:
+    rows = entry.get("rows") or []
+    for row in reversed(rows):
+        value = _log_timestamp_ms(row.get("time"))
+        if value is not None:
+            return value
+    return None
+
+
+def _opn_requested_range_complete(entry: Dict[str, Any]) -> bool:
+    if entry.get("scan_complete"):
+        return True
+    cutoff = int(entry.get("requested_cutoff_ms") or 0)
+    oldest = _opn_oldest_ms(entry)
+    return oldest is not None and oldest <= cutoff
+
+
+def _opn_backfill_worker(firewall_id: int, target: Dict[str, Any]) -> None:
+    """Progressively extend one shared archive without blocking API responses."""
+    try:
+        while True:
+            with _OPN_VIEW_CACHE_LOCK:
+                entry = _OPN_VIEW_CACHE.get(firewall_id)
+                if not entry:
+                    return
+                if _opn_requested_range_complete(entry) or len(entry.get("rows") or []) >= _OPN_ARCHIVE_MAX_ROWS:
+                    entry["loading"] = False
+                    return
+                page = max(1, int(entry.get("scan_page") or 1))
+
+            try:
+                page_rows = _fetch_opnsense_page(target, page, _OPN_BACKFILL_PAGE_SIZE)
+            except Exception as exc:
+                with _OPN_VIEW_CACHE_LOCK:
+                    entry = _OPN_VIEW_CACHE.get(firewall_id)
+                    if entry:
+                        entry["loading"] = False
+                        entry["error"] = str(exc)
+                return
+
+            with _OPN_VIEW_CACHE_LOCK:
+                entry = _OPN_VIEW_CACHE.get(firewall_id)
+                if not entry:
+                    return
+                if not page_rows:
+                    entry["scan_complete"] = True
+                    entry["loading"] = False
+                    entry["last_backfill_at"] = time.time()
+                    return
+
+                added = _opn_entry_merge_rows(entry, page_rows, newest=(page == 1))
+                entry["scan_page"] = page + 1
+                entry["pages_loaded"] = int(entry.get("pages_loaded") or 0) + 1
+                entry["last_backfill_at"] = time.time()
+                entry["error"] = ""
+
+                page_times = [
+                    value for row in page_rows
+                    if (value := _log_timestamp_ms(row.get("time"))) is not None
+                ]
+                if len(page_rows) < _OPN_BACKFILL_PAGE_SIZE:
+                    entry["scan_complete"] = True
+                # If an OPNsense endpoint unexpectedly repeats a page, avoid
+                # spinning forever.  The next range request can restart via
+                # forceRefresh if needed.
+                if added == 0 and page > 1:
+                    entry["scan_complete"] = True
+
+                if _opn_requested_range_complete(entry) or entry.get("scan_complete"):
+                    entry["loading"] = False
+                    return
+
+            # Yield between OPNsense requests so dashboard/control API traffic
+            # remains responsive while a long archive is being backfilled.
+            time.sleep(0.04)
+    finally:
+        with _OPN_VIEW_CACHE_LOCK:
+            entry = _OPN_VIEW_CACHE.get(firewall_id)
+            if entry:
+                entry["loading"] = False
+
+
+def _ensure_opn_backfill(firewall_id: int, target: Dict[str, Any], cutoff_ms: int) -> None:
+    should_start = False
+    with _OPN_VIEW_CACHE_LOCK:
+        entry = _OPN_VIEW_CACHE.get(firewall_id)
+        if not entry:
+            return
+        current_cutoff = int(entry.get("requested_cutoff_ms") or cutoff_ms)
+        # Smaller timestamp means the user asked for an older/wider range.
+        entry["requested_cutoff_ms"] = min(current_cutoff, cutoff_ms)
+        if not entry.get("loading") and not _opn_requested_range_complete(entry):
+            entry["loading"] = True
+            should_start = True
+
+    if should_start:
+        threading.Thread(
+            target=_opn_backfill_worker,
+            args=(firewall_id, dict(target)),
+            daemon=True,
+            name=f"opn-backfill-{firewall_id}",
+        ).start()
+
+
+def _opnsense_cached_archive(
+    firewall_id: int,
+    target: Dict[str, Any],
+    minutes: int,
+    force: bool = False,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Return immediately from a shared progressive archive.
+
+    Only the newest 100 OPNsense rows are fetched synchronously.  Older pages
+    are loaded in the background until the widest range requested by the user
+    is covered.  Switching 1h -> 7d -> 30d therefore extends the same cache
+    instead of rescanning from page 1 for every range.
+    """
+    safe_minutes = max(1, min(int(minutes or 60), 5256000))
+    all_time = safe_minutes >= 5256000
+    now = time.time()
+    cutoff_ms = 0 if all_time else int(now * 1000) - safe_minutes * 60 * 1000
+
+    with _OPN_VIEW_CACHE_LOCK:
+        entry = _OPN_VIEW_CACHE.get(firewall_id)
+        host_changed = bool(entry and entry.get("target_host") != str(target.get("host", "")))
+        if force or host_changed:
+            _OPN_VIEW_CACHE.pop(firewall_id, None)
+            entry = None
+        if entry is None:
+            entry = _new_opn_archive_entry(target)
+            if all_time:
+                entry["requested_cutoff_ms"] = 0
+            else:
+                entry["requested_cutoff_ms"] = cutoff_ms
+            _OPN_VIEW_CACHE[firewall_id] = entry
+        last_latest_refresh = float(entry.get("last_latest_refresh") or 0)
+
+    # One small synchronous request gives the page useful data immediately.
+    if now - last_latest_refresh >= _OPN_LATEST_REFRESH_SECONDS:
+        try:
+            latest = _fetch_opnsense_page(target, 1, _OPN_INITIAL_ROWS)
+            with _OPN_VIEW_CACHE_LOCK:
+                entry = _OPN_VIEW_CACHE.get(firewall_id)
+                if entry:
+                    _opn_entry_merge_rows(entry, latest, newest=True)
+                    entry["last_latest_refresh"] = now
+                    entry["error"] = ""
+        except Exception as exc:
+            with _OPN_VIEW_CACHE_LOCK:
+                entry = _OPN_VIEW_CACHE.get(firewall_id)
+                if entry:
+                    entry["error"] = str(exc)
+
+    _ensure_opn_backfill(firewall_id, target, cutoff_ms)
+
+    with _OPN_VIEW_CACHE_LOCK:
+        entry = _OPN_VIEW_CACHE.get(firewall_id) or _new_opn_archive_entry(target)
+        rows = list(entry.get("rows") or [])
+        oldest = _opn_oldest_ms(entry)
+        meta = {
+            "loading": bool(entry.get("loading")),
+            "complete": bool(_opn_requested_range_complete(entry)),
+            "scan_complete": bool(entry.get("scan_complete")),
+            "pages_loaded": int(entry.get("pages_loaded") or 0),
+            "cached_rows": len(rows),
+            "oldest_ms": oldest,
+            "error": str(entry.get("error") or ""),
+        }
+    return rows, meta
+
+
+def _native_histogram(rows: List[Dict[str, Any]], minutes: int) -> Dict[str, Any]:
+    timestamps = [value for row in rows if (value := _log_timestamp_ms(row.get("time"))) is not None]
+    safe_minutes = max(1, min(int(minutes or 60), 5256000))
+    now_ms = int(time.time() * 1000)
+    if safe_minutes >= 5256000 and timestamps:
+        start_ms = min(timestamps)
+        end_ms = max(timestamps) + 1
+    else:
+        end_ms = now_ms
+        start_ms = now_ms - safe_minutes * 60 * 1000
+
+    span = max(60_000, end_ms - start_ms)
+    candidates = [
+        30_000, 60_000, 120_000, 300_000, 600_000, 900_000, 1_800_000,
+        3_600_000, 7_200_000, 10_800_000, 21_600_000, 43_200_000, 86_400_000,
+        172_800_000, 604_800_000, 2_592_000_000,
+    ]
+    target_interval = max(1, span // 30)
+    interval = next((candidate for candidate in candidates if candidate >= target_interval), candidates[-1])
+    start_ms = (start_ms // interval) * interval
+    end_ms = ((end_ms + interval - 1) // interval) * interval
+    buckets = {start: 0 for start in range(start_ms, end_ms, interval)}
+    for timestamp in timestamps:
+        if timestamp < start_ms or timestamp >= end_ms:
+            continue
+        key = (timestamp // interval) * interval
+        if key in buckets:
+            buckets[key] += 1
+    return {
+        "interval_ms": interval,
+        "buckets": [{"start": start, "count": count} for start, count in buckets.items()],
+    }
+
+
+def _rows_for_minutes(archive: List[Dict[str, Any]], minutes: int) -> List[Dict[str, Any]]:
+    """Slice a newest-first archive without scanning rows older than needed."""
+    safe_minutes = max(1, min(int(minutes or 60), 5256000))
+    if safe_minutes >= 5256000:
+        return list(archive)
+    cutoff = int(time.time() * 1000) - safe_minutes * 60 * 1000
+    result: List[Dict[str, Any]] = []
+    for row in archive:
+        value = _log_timestamp_ms(row.get("time"))
+        if value is not None and value < cutoff:
+            break
+        result.append(row)
+    return result
+
+
+def _opnsense_server_view(firewall_id: int, target: Dict[str, Any], filters: OpnsenseLogFilter) -> Dict[str, Any]:
+    """Lightweight real-time OPNsense view.
+
+    OPNsense's live-log API is optimized for recent rows, not long historical
+    aggregation.  Keep this endpoint intentionally focused on the newest
+    snapshot so the 5-second refresh remains responsive.  Historical analysis
+    belongs in Elasticsearch; this view never starts the progressive archive
+    backfill worker.
+    """
+    # Read exactly one recent snapshot in one OPNsense request.  This keeps
+    # the live view fast and predictable even on slower appliances.
+    fetch_size = 100
+    latest_rows, fetch_attempts = _fetch_opnsense_recent_snapshot(target, fetch_size)
+
+    minutes = max(1, min(int(filters.minutes or 60), 5256000))
+    if minutes < 5256000:
+        cutoff_ms = int(time.time() * 1000) - minutes * 60 * 1000
+        range_rows = [
+            row for row in latest_rows
+            if (value := _log_timestamp_ms(row.get("time"))) is not None and value >= cutoff_ms
+        ]
+    else:
+        range_rows = list(latest_rows)
+
+    filtered = _opn_log_apply_filters(range_rows, filters)
+
+    if filters.fromMs is not None or filters.toMs is not None:
+        from_ms = int(filters.fromMs) if filters.fromMs is not None else None
+        to_ms = int(filters.toMs) if filters.toMs is not None else None
+        filtered = [
+            row for row in filtered
+            if (value := _log_timestamp_ms(row.get("time"))) is not None
+            and (from_ms is None or value >= from_ms)
+            and (to_ms is None or value < to_ms)
+        ]
+
+    def includes(value: Any, needle: str) -> bool:
+        needle = str(needle or "").strip().lower()
+        return not needle or needle in _safe_text(value, "").lower()
+
+    filtered = [
+        row for row in filtered
+        if includes(row.get("protocol"), filters.protocol or "")
+        and includes(row.get("source"), filters.source or "")
+        and includes(row.get("destination"), filters.destination or "")
+        and includes(row.get("interface"), filters.interface or "")
+        and includes(row.get("action"), filters.action or "")
+    ]
+    filtered.sort(key=lambda row: _log_timestamp_ms(row.get("time")) or 0, reverse=True)
+
+    page_size = max(20, min(int(filters.pageSize or filters.tableSize or 100), 100))
+    page_rows = filtered[:page_size]
+    histogram = _native_histogram(filtered, minutes) if filters.includeHistogram else None
+
+    return {
+        "firewall": serialize_firewall(target),
+        "source": "/api/diagnostics/firewall/log",
+        "server_view": True,
+        "live_snapshot": True,
+        "rows": page_rows,
+        "total": len(filtered),
+        "page": 1,
+        "page_size": page_size,
+        "has_more": False,
+        "histogram": histogram,
+        "archive_cached_rows": 0,
+        "archive_loading": False,
+        "archive_complete": True,
+        "archive_scan_complete": True,
+        "archive_pages_loaded": 0,
+        "archive_oldest_ms": None,
+        "archive_error": "",
+        "range_minutes": minutes,
+        "fetch_method": next((a.get("method") for a in reversed(fetch_attempts) if a.get("usable_rows", 0) > 0), None),
+        "fetch_attempts": fetch_attempts,
+        "message": None if page_rows else "OPNsense live-log API가 200을 반환했지만 로그 행이 비어 있습니다.",
+    }
+
+@app.post("/api/firewalls/{firewall_id}/opnsense-logs")
+def get_opnsense_firewall_logs(firewall_id: int, filters: OpnsenseLogFilter):
+    target = get_firewall_or_404(firewall_id)
+    if filters.serverView:
+        return _opnsense_server_view(firewall_id, target, filters)
+
+    search_phrase = (filters.search or "").strip()
+    fetch_all = bool(filters.fetchAll)
+    # OPNsense's diagnostics/firewall/log endpoint is Bootgrid-style: current
+    # is the page number and rowCount is the page size.  Keep each request
+    # reasonably small, but walk every available page when fetchAll=True.
+    page_size = max(50, min(int(filters.pageSize or filters.historySize or 500), 1000))
+    max_rows = max(page_size, min(int(filters.maxRows or 50000), 200000))
+    if not fetch_all:
+        requested = filters.historySize or filters.tableSize or 100
+        page_size = max(1, min(int(requested), 1000))
+        max_rows = page_size
+
+    attempts: List[Dict[str, Any]] = []
+
+    def row_identity(row: Dict[str, Any]) -> str:
+        raw = row.get("raw") if isinstance(row, dict) else None
+        return json.dumps([
+            row.get("time"), row.get("source"), row.get("destination"),
+            row.get("action"), row.get("protocol"), row.get("label"), raw,
+        ], ensure_ascii=False, sort_keys=True, default=str)
+
+    # Prefer the POST form because it supports explicit pagination.
+    # Stop if OPNsense returns fewer rows, an empty page, or a page that adds
+    # no new identities (some older versions ignore `current`).
+    collected: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    page = 1
+    # Do not assume OPNsense honors the requested rowCount exactly; several
+    # versions cap each page internally.  Keep walking until an empty/repeated
+    # page rather than stopping just because a page is smaller than page_size.
+    max_pages = 1000
+
+    while page <= max_pages and len(collected) < max_rows:
+        path = "/api/diagnostics/firewall/log"
+        try:
+            data = opnsense_request(
+                target=target,
+                method="POST",
+                path=path,
+                json_data={
+                    "current": page,
+                    "rowCount": page_size,
+                    "searchPhrase": search_phrase,
+                    "sort": {},
+                },
+            )
+            raw_rows = _extract_log_rows_from_payload(data)
+            attempts.append({
+                "method": "POST",
+                "path": path,
+                "page": page,
+                "ok": True,
+                "found_rows": len(raw_rows),
+                "requested_limit": page_size,
                 "response_type": type(data).__name__,
                 "response_keys": list(data.keys()) if isinstance(data, dict) else [],
             })
 
             if not raw_rows:
-                continue
+                break
 
-            normalized_rows: List[Dict[str, Any]] = []
-            for index, row in enumerate(raw_rows[:row_count]):
-                normalized = normalize_opnsense_log_row(row, index)
+            new_rows = 0
+            for index, raw_row in enumerate(raw_rows):
+                normalized = normalize_opnsense_log_row(raw_row, (page - 1) * page_size + index)
                 if (
                     normalized.get("interface") == "-"
                     and normalized.get("time") == "-"
@@ -1608,66 +2522,127 @@ def get_opnsense_firewall_logs(firewall_id: int, filters: OpnsenseLogFilter):
                     and normalized.get("label") == "-"
                 ):
                     continue
-                normalized_rows.append(normalized)
+                identity = row_identity(normalized)
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                collected.append(normalized)
+                new_rows += 1
+                if len(collected) >= max_rows:
+                    break
 
-            filtered_rows = _opn_log_apply_filters(normalized_rows, filters)
-            visible_limit = max(1, min(int(filters.tableSize or 25), 100))
-            limited_rows = filtered_rows[:visible_limit]
+            if not fetch_all:
+                break
+            if new_rows == 0:
+                break
+            page += 1
 
-            return {
-                "firewall": serialize_firewall(target),
-                "source": path,
-                "method": method,
-                "total": len(filtered_rows),
-                "returned": len(limited_rows),
-                "requested_limit": row_count,
-                "rows": limited_rows,
-                "attempts": attempts,
-            }
-
-        except HTTPException as e:
+        except HTTPException as exc:
             attempts.append({
-                "method": method,
-                "path": path,
-                "ok": False,
-                "error": e.detail,
+                "method": "POST", "path": path, "page": page,
+                "ok": False, "error": exc.detail,
             })
-            continue
-
-        except Exception as e:
+            # If the paginated POST endpoint is unavailable, fall back to the
+            # one-shot GET form below.
+            collected = []
+            seen = set()
+            break
+        except Exception as exc:
             attempts.append({
-                "method": method,
-                "path": path,
-                "ok": False,
-                "error": str(e),
+                "method": "POST", "path": path, "page": page,
+                "ok": False, "error": str(exc),
             })
-            continue
+            collected = []
+            seen = set()
+            break
+
+    # Compatibility fallback for installations that expose only the GET form.
+    if not collected:
+        get_limit = max_rows if fetch_all else page_size
+        get_limit = max(1, min(get_limit, 50000))
+        path = f"/api/diagnostics/firewall/log?limit={get_limit}"
+        try:
+            data = opnsense_request(target=target, method="GET", path=path, json_data=None)
+            raw_rows = _extract_log_rows_from_payload(data)
+            attempts.append({
+                "method": "GET", "path": path, "ok": True,
+                "found_rows": len(raw_rows), "requested_limit": get_limit,
+                "response_type": type(data).__name__,
+                "response_keys": list(data.keys()) if isinstance(data, dict) else [],
+            })
+            for index, raw_row in enumerate(raw_rows[:max_rows]):
+                normalized = normalize_opnsense_log_row(raw_row, index)
+                if (
+                    normalized.get("interface") == "-"
+                    and normalized.get("time") == "-"
+                    and normalized.get("source") == "-"
+                    and normalized.get("destination") == "-"
+                    and normalized.get("label") == "-"
+                ):
+                    continue
+                identity = row_identity(normalized)
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                collected.append(normalized)
+        except HTTPException as exc:
+            attempts.append({"method": "GET", "path": path, "ok": False, "error": exc.detail})
+        except Exception as exc:
+            attempts.append({"method": "GET", "path": path, "ok": False, "error": str(exc)})
+
+    filtered_rows = _opn_log_apply_filters(collected, filters)
+
+    # fetchAll deliberately returns the full retained set.  The live-refresh
+    # path still limits rows, which keeps the 5-second poll inexpensive.
+    if fetch_all:
+        limited_rows = filtered_rows
+    else:
+        visible_limit = max(1, min(int(filters.tableSize or 100), 1000))
+        limited_rows = filtered_rows[:visible_limit]
 
     return {
         "firewall": serialize_firewall(target),
-        "source": None,
-        "method": None,
-        "total": 0,
-        "returned": 0,
-        "requested_limit": row_count,
-        "rows": [],
+        "source": "/api/diagnostics/firewall/log",
+        "method": "POST" if collected else None,
+        "total": len(filtered_rows),
+        "returned": len(limited_rows),
+        "requested_limit": page_size,
+        "fetch_all": fetch_all,
+        "pages_scanned": max(1, page if collected else 0),
+        "truncated": fetch_all and len(collected) >= max_rows,
+        "rows": limited_rows,
         "attempts": attempts,
-        "message": "OPNsense API 요청은 성공했지만 로그 row를 찾지 못했습니다. attempts를 확인하세요.",
+        "message": None if limited_rows else "OPNsense에서 현재 보관 중인 방화벽 로그를 찾지 못했습니다.",
     }
 
 @app.post("/api/firewalls/{firewall_id}/event-logs")
 def get_event_logs(firewall_id: int, body: EventLogsQueryBody):
     target = get_firewall_or_404(firewall_id)
-    rows = search_firewall_events(
+    event_index = str(target.get("event_log_index") or "").strip()
+    if not event_index:
+        raise HTTPException(
+            status_code=409,
+            detail="방화벽 이벤트 인덱스가 설정되지 않았습니다. 방화벽 관리에서 OPNsense filterlog 전용 인덱스를 설정하세요.",
+        )
+    rows = search_firewall_archive_events(
         target=target,
-        log_index=target.get("log_index", "logs-suricata.eve-*"),
-        size=max(1, min(body.size, 200)),
-        minutes=max(1, min(body.minutes, 24 * 60)),
+        log_index=event_index,
+        size=max(1, min(body.size, 1000)),
+        minutes=max(1, min(body.minutes, 5256000)),
         action=body.action.strip(),
         interface=body.interface.strip(),
+        protocol=body.protocol.strip(),
+        source_ip=body.source.strip(),
+        destination_ip=body.destination.strip(),
         query_text=body.query.strip(),
     )
-    return {"rows": rows, "firewall": serialize_firewall(target), "exportColumns": KIBANA_EXPORT_COLUMNS}
+    return {
+        "rows": rows,
+        "firewall": serialize_firewall(target),
+        "exportColumns": KIBANA_EXPORT_COLUMNS,
+        "source": "ELK",
+        "index": event_index,
+    }
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
 from fastapi import HTTPException
@@ -2410,482 +3385,1151 @@ def get_legacy_interface_rules(firewall_id: int, interface: str = "lan"):
         "message": "WebGUI HTML 파싱 결과입니다. 자동 생성/레거시 룰은 조회 전용입니다.",
     }
 
-# ============================================================
-# Security Automation MVP
-# 붙여넣기 위치: main.py 맨 아래
-#
-# 필요 전제:
-# - app
-# - get_firewall_or_404
-# - serialize_firewall
-# - search_firewall_events
-# - opnsense_request
-# - safe_apply_firewall
-# 위 함수들이 main.py 안에 이미 있어야 합니다.
-# ============================================================
 
-import hashlib
+# Stored ELK results + explicit manual response only.
 import ipaddress
-from datetime import datetime, timezone
-from urllib.parse import quote as _security_quote
+from threading import Lock
+MANUAL_BLOCK_LOCK = Lock()
+MANUAL_BLOCK_FILE = BASE_DIR / "manual_blocks.json"
 
-from pydantic import BaseModel as _SecurityBaseModel
-
-
-SECURITY_ALERTS_DB = BASE_DIR / "security_alerts.json"
-SECURITY_BLOCKED_DB = BASE_DIR / "security_blocked_ips.json"
-DEFAULT_SECURITY_ALIAS = os.getenv("SECURITY_BLOCK_ALIAS", "blocked_attackers").strip() or "blocked_attackers"
-
-
-class SecurityBlockBody(_SecurityBaseModel):
+class ManualBlockBody(BaseModel):
     source_ip: str
-    alias_name: str = DEFAULT_SECURITY_ALIAS
-    reason: str = "blocked by security automation"
     force: bool = False
 
 
-def _security_load_json(path: Path, default):
+def _load_manual_block_history() -> List[Dict[str, Any]]:
     try:
-        if not path.exists():
-            return default
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return data if data is not None else default
-    except Exception:
-        return default
+        if not MANUAL_BLOCK_FILE.exists():
+            return []
+        data = json.loads(MANUAL_BLOCK_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except (OSError, ValueError, json.JSONDecodeError):
+        return []
 
 
-def _security_save_json(path: Path, data):
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+def _save_manual_block_history(history: List[Dict[str, Any]]) -> None:
+    temp = MANUAL_BLOCK_FILE.with_suffix('.tmp')
+    temp.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp.replace(MANUAL_BLOCK_FILE)
 
 
-def _security_to_int(value, default=0):
+def _current_manual_blocks(firewall_id: int) -> List[Dict[str, Any]]:
+    latest: Dict[str, Dict[str, Any]] = {}
+    for item in _load_manual_block_history():
+        if not isinstance(item, dict) or int(item.get("firewall_id", -1)) != firewall_id:
+            continue
+        ip = str(item.get("ip") or "").strip()
+        if not ip:
+            continue
+        latest[ip] = item
+
+    rows = []
+    for ip, item in latest.items():
+        action = str(item.get("action") or "block").lower()
+        if action != "block":
+            continue
+        rows.append({
+            "ip": ip,
+            "alias": item.get("alias") or os.getenv("SECURITY_BLOCK_ALIAS", "blocked_attackers"),
+            "alert_id": item.get("alert_id") or "",
+            "created_at": item.get("created_at"),
+            "status": "blocked",
+        })
+
+    rows.sort(key=lambda row: int(row.get("created_at") or 0), reverse=True)
+    return rows
+
+
+def _manual_service(target):
+    return ManualResponse(opnsense_request, target,
+        os.getenv("SECURITY_BLOCK_ALIAS", "blocked_attackers").strip() or "blocked_attackers")
+
+
+def _protected_manual_addresses():
+    path = BASE_DIR / "manual_response_config.json"
+    config = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    entries = config.get("protected_addresses", [])
+    if not isinstance(entries, list):
+        raise ResponseError("protected_addresses 설정은 IP/CIDR 목록이어야 합니다.")
+    entries = entries + [x.strip() for x in os.getenv("SECURITY_PROTECTED_IPS", "").split(",") if x.strip()]
+    for entry in entries:
+        ipaddress.ip_network(str(entry), strict=False)
+    return entries
+
+
+def _manual_audit(firewall_id, ip, action, service, result, alert_id=""):
+    record = {"firewall_id": firewall_id, "ip": ip, "alias": service.alias,
+              "action": action, "alert_id": alert_id, "created_at": int(time.time())}
     try:
-        if value in (None, "", "-"):
-            return default
-        return int(float(str(value)))
-    except Exception:
-        return default
+        history = _load_manual_block_history()
+        history.append(record)
+        _save_manual_block_history(history)
+    except OSError:
+        result["audit_warning"] = "방화벽 적용은 완료됐지만 로컬 이력 저장에 실패했습니다."
+    return {**record, **result}
 
 
-def _security_text(value, default="-"):
-    if value in (None, ""):
-        return default
-    if isinstance(value, (dict, list)):
-        try:
-            return json.dumps(value, ensure_ascii=False)
-        except Exception:
-            return default
-    return str(value)
-
-
-def _security_get_nested(data, path, default=""):
-    cur = data
-    for key in str(path).split("."):
-        if not isinstance(cur, dict):
-            return default
-        cur = cur.get(key)
-        if cur is None:
-            return default
-    return cur
-
-
-def _security_is_private_or_reserved(ip_text: str) -> bool:
+@app.get("/api/firewalls/{firewall_id}/manual-blocks")
+def list_manual_blocks(firewall_id: int):
+    target = get_firewall_or_404(firewall_id)
     try:
-        ip = ipaddress.ip_address(str(ip_text).strip())
-        return ip.is_private or ip.is_loopback or ip.is_reserved or ip.is_multicast or ip.is_link_local
+        with MANUAL_BLOCK_LOCK:
+            service = _manual_service(target)
+            _, config = service.alias_config()
+            configured = contents(config.get("content", "")) if config else []
+            runtime = service.table() if config else set()
+            rules_ok = service.check_rules() if config else False
+            history = {row["ip"]: row for row in _current_manual_blocks(firewall_id)}
+            rows = []
+            for raw in configured:
+                try:
+                    ip = str(ipaddress.ip_address(raw))
+                except ValueError:
+                    raise ResponseError("차단 Alias에 단일 IP 이외의 항목이 있습니다.")
+                active = config.get("enabled") == "1" and rules_ok and service.member(ip, runtime)
+                rows.append({**history.get(ip, {}), "ip": ip, "alias": service.alias,
+                             "status": "blocked" if active else "not_applied"})
+            rows.sort(key=lambda r: int(r.get("created_at") or 0), reverse=True)
+            return {"rows": rows, "count": sum(r["status"] == "blocked" for r in rows),
+                    "alias": service.alias, "verified": True}
+    except ResponseError as exc:
+        raise HTTPException(502, exc.detail)
+
+
+@app.delete("/api/firewalls/{firewall_id}/manual-blocks/{ip_address}")
+def unblock_manual_ip(firewall_id: int, ip_address: str):
+    target = get_firewall_or_404(firewall_id)
+    try:
+        ip = str(ipaddress.ip_address(ip_address.strip()))
+    except ValueError:
+        raise HTTPException(400, "유효한 IP 주소가 아닙니다.")
+    try:
+        with MANUAL_BLOCK_LOCK:
+            service = _manual_service(target)
+            result = service.change(ip, False)
+            record = _manual_audit(firewall_id, ip, "unblock", service, result)
+        return {**record, "message": f"{ip} 수동 차단을 해제했습니다."}
+    except ResponseError as exc:
+        raise HTTPException(502, exc.detail)
+
+
+def _encode_page_cursor(payload: Dict[str, Any]) -> str:
+    raw = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _decode_page_cursor(value: str) -> Dict[str, Any]:
+    value = str(value or "").strip()
+    if not value:
+        return {}
+    try:
+        padded = value + "=" * (-len(value) % 4)
+        data = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+        return data if isinstance(data, dict) else {}
     except Exception:
-        return True
+        raise HTTPException(status_code=400, detail="잘못된 로그 페이지 커서입니다.")
 
 
-def _security_alert_id(row: Dict[str, Any]) -> str:
-    raw = "|".join([
-        _security_text(row.get("timestamp"), ""),
-        _security_text(row.get("source_ip"), ""),
-        _security_text(row.get("destination_ip"), ""),
-        _security_text(row.get("destination_port"), ""),
-        _security_text(row.get("rule"), ""),
-        _security_text(row.get("event_type"), ""),
-    ])
-    return hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()[:16]
+def _security_event_query(
+    minutes: int,
+    query_text: str = "",
+    attack_type: str = "",
+    risk: str = "",
+    source_ip: str = "",
+    destination_ip: str = "",
+    result: str = "attack",
+    from_ms: Optional[int] = None,
+    to_ms: Optional[int] = None,
+) -> Dict[str, Any]:
+    must: List[Dict[str, Any]] = []
+    filters: List[Dict[str, Any]] = []
+    must_not: List[Dict[str, Any]] = []
+
+    if from_ms is not None or to_ms is not None:
+        time_range: Dict[str, Any] = {}
+        if from_ms is not None:
+            time_range["gte"] = int(from_ms)
+        if to_ms is not None:
+            time_range["lt"] = int(to_ms)
+        time_range["format"] = "epoch_millis"
+        filters.append({"range": {"@timestamp": time_range}})
+    else:
+        safe_minutes = max(1, min(int(minutes or 60), 5256000))
+        if safe_minutes < 5256000:
+            filters.append({"range": {"@timestamp": {"gte": f"now-{safe_minutes}m", "lte": "now"}}})
+
+    result = str(result or "all").strip().lower()
+    if result == "attack":
+        filters.append({
+            "bool": {
+                "should": [
+                    {
+                        "bool": {
+                            "filter": [{"exists": {"field": "ml.detected_class"}}],
+                            "must_not": [
+                                {"terms": {"ml.detected_class.keyword": ["normal", "Normal", "benign", "Benign"]}}
+                            ],
+                        }
+                    },
+                    {
+                        "bool": {
+                            "filter": [{"exists": {"field": "suricata.eve.alert.signature"}}],
+                            "must_not": [{"exists": {"field": "ml.detected_class"}}],
+                        }
+                    },
+                ],
+                "minimum_should_match": 1,
+            }
+        })
+    elif result == "normal":
+        filters.append({
+            "bool": {
+                "should": [
+                    {"terms": {"ml.detected_class.keyword": ["normal", "Normal", "benign", "Benign"]}},
+                    {"match_phrase": {"ml.detected_class": "Normal"}},
+                    {"match_phrase": {"ml.detected_class": "Benign"}},
+                ],
+                "minimum_should_match": 1,
+            }
+        })
+    elif result == "unanalyzed":
+        must_not.append({"exists": {"field": "ml.detected_class"}})
+
+    query_text = str(query_text or "").strip()
+    if query_text:
+        must.append({
+            "multi_match": {
+                "query": query_text,
+                "fields": [
+                    "ml.detected_class^3",
+                    "final_risk^2",
+                    "source.ip^2",
+                    "destination.ip^2",
+                    "suricata.eve.alert.signature^3",
+                    "message",
+                    "event.original",
+                ],
+                "lenient": True,
+            }
+        })
+
+    attack_type = str(attack_type or "").strip()
+    if attack_type:
+        filters.append({
+            "bool": {
+                "should": [
+                    {"wildcard": {"ml.detected_class.keyword": {"value": f"*{attack_type}*", "case_insensitive": True}}},
+                    {"match_phrase": {"ml.detected_class": attack_type}},
+                ],
+                "minimum_should_match": 1,
+            }
+        })
+
+    risk = str(risk or "").strip()
+    if risk:
+        filters.append({
+            "bool": {
+                "should": [
+                    {"term": {"final_risk.keyword": risk}},
+                    {"term": {"final_risk": risk}},
+                ],
+                "minimum_should_match": 1,
+            }
+        })
+
+    source_ip = str(source_ip or "").strip()
+    if source_ip:
+        filters.append({"bool": {"should": [
+            {"term": {"source.ip": source_ip}},
+            {"match_phrase": {"event.original": source_ip}},
+            {"match_phrase": {"message": source_ip}},
+        ], "minimum_should_match": 1}})
+    destination_ip = str(destination_ip or "").strip()
+    if destination_ip:
+        filters.append({"bool": {"should": [
+            {"term": {"destination.ip": destination_ip}},
+            {"match_phrase": {"event.original": destination_ip}},
+            {"match_phrase": {"message": destination_ip}},
+        ], "minimum_should_match": 1}})
+
+    bool_query: Dict[str, Any] = {}
+    if must:
+        bool_query["must"] = must
+    if filters:
+        bool_query["filter"] = filters
+    if must_not:
+        bool_query["must_not"] = must_not
+    return {"bool": bool_query} if bool_query else {"match_all": {}}
 
 
-def _security_keyword_score(text: str) -> Tuple[int, List[str]]:
-    keywords = {
-        "cve": 20,
-        "exploit": 22,
-        "shell": 18,
-        "command": 16,
-        "injection": 18,
-        "sql": 14,
-        "xss": 14,
-        "malware": 22,
-        "trojan": 22,
-        "ransom": 25,
-        "scan": 12,
-        "bruteforce": 18,
-        "brute force": 18,
-        "dos": 20,
-        "ddos": 25,
-        "web attack": 16,
-        "attempted-admin": 16,
-        "attempted-recon": 12,
-        "bad-unknown": 10,
+def _security_hit_to_row(hit: Dict[str, Any], index: int = 0) -> Dict[str, Any]:
+    src = hit.get("_source") if isinstance(hit.get("_source"), dict) else {}
+    timestamp_value = _read_elastic_value(src, "@timestamp", "-")
+    document_id = hit.get("_id", f"event-{index}")
+    row = {
+        "id": f"{document_id}-{timestamp_value}-{index}",
+        "_id": document_id,
+        "_index": hit.get("_index", ""),
+        "timestamp": timestamp_value,
+        "source_ip": _read_elastic_value(src, "source.ip", "-"),
+        "destination_ip": _read_elastic_value(src, "destination.ip", "-"),
+        "alert_signature": _read_elastic_value(src, "suricata.eve.alert.signature", ""),
+        "rule": _read_elastic_value(src, "suricata.eve.alert.signature", "-") or "-",
+        "event_type": _read_elastic_value(src, "suricata.eve.event_type", "alert"),
+        "ml_detected_class": _read_elastic_value(src, "ml.detected_class", ""),
+        "ml_confidence_percent": _read_elastic_value(src, "ml.confidence_percent", ""),
+        "ml_risk_level": _read_elastic_value(src, "ml.risk_level", ""),
+        "final_risk": _read_elastic_value(src, "final_risk", ""),
+        # Keep the page payload compact: only the fields required by the live
+        # attack table and its detail panel are returned.
+        "raw": src,
     }
-
-    lowered = text.lower()
-    score = 0
-    reasons = []
-
-    for keyword, value in keywords.items():
-        if keyword in lowered:
-            score += value
-            reasons.append(f"signature/category keyword: {keyword} +{value}")
-
-    return min(score, 35), reasons[:5]
+    return decorate(row)
 
 
-def _security_calculate_risk(row: Dict[str, Any], source_count: int = 1) -> Dict[str, Any]:
-    raw = row.get("raw") if isinstance(row.get("raw"), dict) else {}
+def _elastic_post_json(target: Dict[str, Any], url: str, body: Optional[Dict[str, Any]] = None, timeout: int = 20) -> Dict[str, Any]:
+    try:
+        response = requests.post(
+            url,
+            headers=elastic_headers(target),
+            auth=elastic_auth(target),
+            json=body,
+            verify=_elastic_verify_ssl(target),
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data if isinstance(data, dict) else {}
+    except requests.exceptions.ConnectTimeout:
+        raise HTTPException(status_code=504, detail=f"Elastic 연결 시간 초과: {_elastic_url(target)}")
+    except requests.exceptions.ReadTimeout:
+        raise HTTPException(status_code=504, detail=f"Elastic 응답 시간 초과: {_elastic_url(target)}")
+    except requests.exceptions.ConnectionError as exc:
+        raise HTTPException(status_code=502, detail=f"Elastic 연결 실패: {exc}")
+    except requests.exceptions.RequestException as exc:
+        detail = ""
+        try:
+            detail = response.text
+        except Exception:
+            detail = str(exc)
+        raise HTTPException(status_code=500, detail=f"Elastic 요청 실패: {exc} / {detail}")
 
-    event_type = _security_text(row.get("event_type") or row.get("action"), "").lower()
-    signature = _security_text(row.get("rule"), "")
-    category = _security_text(row.get("category"), "")
-    protocol = _security_text(row.get("protocol"), "").lower()
-    src_ip = _security_text(row.get("source_ip"), "")
-    dst_ip = _security_text(row.get("destination_ip"), "")
-    dst_port = _security_to_int(row.get("destination_port"), 0)
 
-    severity = _security_to_int(row.get("severity"), 0)
+@app.get("/api/firewalls/{firewall_id}/security-alerts/page")
+def get_security_alert_page(
+    firewall_id: int,
+    minutes: int = 60,
+    size: int = 100,
+    query: str = "",
+    attack_type: str = "",
+    risk: str = "",
+    source: str = "",
+    destination: str = "",
+    result: str = "attack",
+    cursor: str = "",
+    include_histogram: bool = True,
+    from_ms: Optional[int] = None,
+    to_ms: Optional[int] = None,
+):
+    """Efficient Elasticsearch-backed log view.
 
-    score = 0
-    reasons = []
+    The selected range (for example 7 days) always applies to the complete
+    Elasticsearch result set.  Only one 100-row page is transferred to the
+    browser, while ``hits.total`` and the date histogram are calculated across
+    the entire filtered range.  ``next_cursor`` walks the same 7-day result set
+    backwards without loading it all into React memory.
+    """
+    target = get_firewall_or_404(firewall_id)
+    ensure_elastic_config(target)
+    page_size = max(20, min(int(size or 100), 250))
+    log_index = str(target.get("log_index") or "logs-suricata.eve-*").strip()
+    decoded = _decode_page_cursor(cursor)
+    pit_id = str(decoded.get("pit") or "")
+    search_after = decoded.get("sort") if isinstance(decoded.get("sort"), list) else None
 
-    if event_type == "alert" or "alert" in event_type:
-        score += 25
-        reasons.append("Suricata alert event +25")
-    elif event_type in {"drop", "blocked", "block", "deny"}:
-        score += 20
-        reasons.append("blocked/drop event +20")
-    else:
-        score += 5
-        reasons.append("base network event +5")
+    if not pit_id:
+        safe_index = quote(log_index, safe="*,-_.")
+        pit_payload = _elastic_post_json(
+            target,
+            f"{_elastic_url(target)}/{safe_index}/_pit?keep_alive=10m",
+            body=None,
+            timeout=10,
+        )
+        pit_id = str(pit_payload.get("id") or "")
+        if not pit_id:
+            raise HTTPException(status_code=502, detail="Elasticsearch PIT 생성에 실패했습니다.")
 
-    if severity == 1:
-        score += 30
-        reasons.append("high severity 1 +30")
-    elif severity == 2:
-        score += 22
-        reasons.append("medium severity 2 +22")
-    elif severity == 3:
-        score += 12
-        reasons.append("low severity 3 +12")
-    elif severity > 0:
-        score += 8
-        reasons.append(f"severity {severity} +8")
+    base_query = _security_event_query(
+        minutes=minutes,
+        query_text=query,
+        attack_type=attack_type,
+        risk=risk,
+        source_ip=source,
+        destination_ip=destination,
+        result=result,
+        from_ms=from_ms,
+        to_ms=to_ms,
+    )
+    body: Dict[str, Any] = {
+        "size": page_size,
+        "track_total_hits": True,
+        "pit": {"id": pit_id, "keep_alive": "10m"},
+        "sort": [
+            {"@timestamp": {"order": "desc", "unmapped_type": "date"}},
+            {"_shard_doc": "desc"},
+        ],
+        "_source": [
+            "@timestamp",
+            "type",
+            "source.ip",
+            "destination.ip",
+            "suricata.eve.event_type",
+            "suricata.eve.alert.signature",
+            "ml.detected_class",
+            "ml.confidence_percent",
+            "ml.risk_level",
+            "final_risk",
+            # Legacy fallbacks remain cheap and keep old indexed rows readable.
+            "main_result_display",
+            "ml_prediction",
+            "ml_confidence",
+        ],
+        "query": base_query,
+    }
+    if search_after:
+        body["search_after"] = search_after
+    if include_histogram:
+        body["aggs"] = {
+            "timeline": {
+                "auto_date_histogram": {
+                    "field": "@timestamp",
+                    "buckets": 30,
+                    "minimum_interval": "minute",
+                }
+            }
+        }
 
-    keyword_score, keyword_reasons = _security_keyword_score(f"{signature} {category}")
-    if keyword_score:
-        score += keyword_score
-        reasons.extend(keyword_reasons)
+    payload = _elastic_post_json(target, f"{_elastic_url(target)}/_search", body=body, timeout=25)
+    current_pit = str(payload.get("pit_id") or pit_id)
+    hits_block = payload.get("hits") if isinstance(payload.get("hits"), dict) else {}
+    hits = hits_block.get("hits") if isinstance(hits_block.get("hits"), list) else []
+    total_value = hits_block.get("total", 0)
+    total = int(total_value.get("value", 0) if isinstance(total_value, dict) else total_value or 0)
+    rows = [_security_hit_to_row(hit, index) for index, hit in enumerate(hits)]
 
-    if source_count >= 10:
-        score += 25
-        reasons.append(f"same source repeated {source_count} times +25")
-    elif source_count >= 5:
-        score += 18
-        reasons.append(f"same source repeated {source_count} times +18")
-    elif source_count >= 3:
-        score += 10
-        reasons.append(f"same source repeated {source_count} times +10")
+    next_cursor = ""
+    if len(hits) >= page_size and hits and isinstance(hits[-1].get("sort"), list):
+        next_cursor = _encode_page_cursor({"pit": current_pit, "sort": hits[-1]["sort"]})
 
-    if dst_port in {22, 23, 3389, 445, 139, 3306, 5432, 6379, 9200, 5601}:
-        score += 12
-        reasons.append(f"sensitive destination port {dst_port} +12")
-    elif dst_port in {80, 443, 8080, 8443}:
-        score += 7
-        reasons.append(f"web service destination port {dst_port} +7")
-
-    if protocol in {"tcp", "udp", "icmp"}:
-        score += 3
-        reasons.append(f"protocol {protocol} +3")
-
-    if src_ip and src_ip != "-" and not _security_is_private_or_reserved(src_ip):
-        score += 8
-        reasons.append("external source ip +8")
-
-    # Suricata message JSON fallback.
-    alert_sig = _security_get_nested(raw, "alert.signature", "")
-    alert_cat = _security_get_nested(raw, "alert.category", "")
-    if alert_sig or alert_cat:
-        extra_score, extra_reasons = _security_keyword_score(f"{alert_sig} {alert_cat}")
-        if extra_score:
-            score += min(extra_score, 15)
-            reasons.extend(extra_reasons[:2])
-
-    score = max(0, min(100, int(score)))
-
-    if score >= 90:
-        level = "critical"
-        label = "매우 높음"
-    elif score >= 70:
-        level = "high"
-        label = "높음"
-    elif score >= 40:
-        level = "medium"
-        label = "중간"
-    else:
-        level = "low"
-        label = "낮음"
-
-    recommended_action = "notify"
-    if score >= 90:
-        recommended_action = "auto_block_candidate"
-    elif score >= 70:
-        recommended_action = "approval_required"
-    elif score >= 40:
-        recommended_action = "watch"
+    histogram = None
+    if include_histogram:
+        timeline = payload.get("aggregations", {}).get("timeline", {})
+        buckets = timeline.get("buckets") if isinstance(timeline.get("buckets"), list) else []
+        interval = str(timeline.get("interval") or "")
+        histogram = {
+            "interval": interval,
+            "buckets": [
+                {"start": int(bucket.get("key", 0)), "count": int(bucket.get("doc_count", 0))}
+                for bucket in buckets
+            ],
+        }
 
     return {
-        "score": score,
-        "level": level,
-        "label": label,
-        "reasons": reasons[:8],
-        "recommended_action": recommended_action,
+        "rows": rows,
+        "total": total,
+        "page_size": page_size,
+        "page_count": len(rows),
+        "next_cursor": next_cursor,
+        "has_more": bool(next_cursor),
+        "histogram": histogram,
+        "source": "ELK",
+        "range_minutes": max(1, min(int(minutes or 60), 5256000)),
     }
 
 
-def _security_build_alerts(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    source_counts: Dict[str, int] = {}
-    for row in rows:
-        src_ip = _security_text(row.get("source_ip"), "-")
-        if src_ip and src_ip != "-":
-            source_counts[src_ip] = source_counts.get(src_ip, 0) + 1
+def _archive_event_query(
+    minutes: int = 60,
+    query_text: str = "",
+    action: str = "",
+    interface: str = "",
+    protocol: str = "",
+    source_ip: str = "",
+    destination_ip: str = "",
+    from_ms: Optional[int] = None,
+    to_ms: Optional[int] = None,
+) -> Dict[str, Any]:
+    filters: List[Dict[str, Any]] = []
+    must: List[Dict[str, Any]] = []
+    if from_ms is not None or to_ms is not None:
+        bounds: Dict[str, Any] = {"format": "epoch_millis"}
+        if from_ms is not None:
+            bounds["gte"] = int(from_ms)
+        if to_ms is not None:
+            bounds["lt"] = int(to_ms)
+        filters.append({"range": {"@timestamp": bounds}})
+    else:
+        safe_minutes = max(1, min(int(minutes or 60), 5256000))
+        if safe_minutes < 5256000:
+            filters.append({"range": {"@timestamp": {"gte": f"now-{safe_minutes}m", "lte": "now"}}})
 
-    saved = _security_load_json(SECURITY_ALERTS_DB, {})
-    if not isinstance(saved, dict):
-        saved = {}
+    query_text = str(query_text or "").strip()
+    if query_text:
+        must.append({"multi_match": {"query": query_text, "fields": [
+            "source.ip^2", "destination.ip^2", "source.port", "destination.port",
+            "network.transport", "network.protocol", "network.direction",
+            "suricata.eve.event_type", "suricata.eve.in_iface",
+            "suricata.eve.alert.signature^3", "suricata.eve.alert.category",
+            "event.action^3", "event.type", "event.category", "event.dataset",
+            "opnsense.firewall.action^3", "opnsense.firewall.interface", "opnsense.firewall.reason",
+            "rule.id", "rule.name",
+            "message^2", "event.original^2", "host.name", "type"
+        ], "lenient": True}})
 
-    alerts = []
+    action = str(action or "").strip()
+    if action:
+        filters.append({"bool": {"should": [
+            {"term": {"event.action.keyword": action.lower()}},
+            {"term": {"event.action": action.lower()}},
+            {"term": {"opnsense.firewall.action.keyword": action.lower()}},
+            {"term": {"opnsense.firewall.action": action.lower()}},
+            {"match_phrase": {"event.original": action}},
+            {"match_phrase": {"message": action}}
+        ], "minimum_should_match": 1}})
 
-    for row in rows:
-        src_ip = _security_text(row.get("source_ip"), "-")
-        risk = _security_calculate_risk(row, source_counts.get(src_ip, 1))
-        alert_id = _security_alert_id(row)
-        previous = saved.get(alert_id, {})
+    interface = str(interface or "").strip()
+    if interface:
+        filters.append({"bool": {"should": [
+            {"term": {"opnsense.firewall.interface.keyword": interface}},
+            {"term": {"opnsense.firewall.interface": interface}},
+            {"term": {"suricata.eve.in_iface.keyword": interface}},
+            {"term": {"observer.ingress.interface.name.keyword": interface}},
+            {"term": {"observer.egress.interface.name.keyword": interface}},
+            {"match_phrase": {"event.original": interface}},
+            {"match_phrase": {"message": interface}}
+        ], "minimum_should_match": 1}})
 
-        status = previous.get("status") or "detected"
-        if risk["score"] >= 90 and status == "detected":
-            status = "auto_block_candidate"
-        elif risk["score"] >= 70 and status == "detected":
-            status = "approval_required"
+    protocol = str(protocol or "").strip()
+    if protocol:
+        filters.append({"bool": {"should": [
+            {"term": {"opnsense.firewall.protocol.keyword": protocol.lower()}},
+            {"term": {"opnsense.firewall.protocol": protocol.lower()}},
+            {"term": {"network.transport.keyword": protocol.lower()}},
+            {"term": {"network.transport": protocol.lower()}},
+            {"term": {"network.protocol.keyword": protocol.lower()}},
+            {"term": {"suricata.eve.proto.keyword": protocol.upper()}},
+            {"match_phrase": {"event.original": protocol}}
+        ], "minimum_should_match": 1}})
 
-        alert = {
-            "id": alert_id,
-            "timestamp": row.get("timestamp"),
-            "source_ip": row.get("source_ip"),
-            "source_port": row.get("source_port"),
-            "destination_ip": row.get("destination_ip"),
-            "destination_port": row.get("destination_port"),
-            "protocol": row.get("protocol"),
-            "event_type": row.get("event_type"),
-            "signature": row.get("rule"),
-            "category": row.get("category"),
-            "severity": row.get("severity"),
-            "host": row.get("host"),
-            "risk": risk,
-            "status": status,
-            "response": previous.get("response"),
-            "raw": row.get("raw"),
-        }
+    source_ip = str(source_ip or "").strip()
+    if source_ip:
+        filters.append({"bool": {"should": [
+            {"term": {"source.ip": source_ip}},
+            {"match_phrase": {"event.original": source_ip}},
+            {"match_phrase": {"message": source_ip}},
+        ], "minimum_should_match": 1}})
+    destination_ip = str(destination_ip or "").strip()
+    if destination_ip:
+        filters.append({"bool": {"should": [
+            {"term": {"destination.ip": destination_ip}},
+            {"match_phrase": {"event.original": destination_ip}},
+            {"match_phrase": {"message": destination_ip}},
+        ], "minimum_should_match": 1}})
 
-        saved[alert_id] = {
-            **previous,
-            "id": alert_id,
-            "status": status,
-            "last_seen": int(time.time()),
-            "risk_score": risk["score"],
-            "source_ip": row.get("source_ip"),
-            "destination_ip": row.get("destination_ip"),
-            "signature": row.get("rule"),
-            "response": previous.get("response"),
-        }
-
-        alerts.append(alert)
-
-    _security_save_json(SECURITY_ALERTS_DB, saved)
-    return alerts
+    bool_query: Dict[str, Any] = {}
+    if must:
+        bool_query["must"] = must
+    if filters:
+        bool_query["filter"] = filters
+    return {"bool": bool_query} if bool_query else {"match_all": {}}
 
 
-def _security_filter_attack_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    attack_rows = []
+def _archive_event_hit_to_row(hit: Dict[str, Any], index: int = 0) -> Dict[str, Any]:
+    """Normalize an Elasticsearch-backed OPNsense firewall/filterlog event.
 
-    for row in rows:
-        event_type = _security_text(row.get("event_type") or row.get("action"), "").lower()
-        signature = _security_text(row.get("rule"), "").lower()
-        category = _security_text(row.get("category"), "").lower()
-        severity = _security_to_int(row.get("severity"), 0)
+    The archive page is intentionally firewall-centric.  Suricata/ML fields are
+    not promoted into the table because they describe IDS analysis rather than
+    the pf firewall decision (pass/block).
+    """
+    src = hit.get("_source") if isinstance(hit.get("_source"), dict) else {}
+    message_value = _read_elastic_value(src, "message", "") or _read_elastic_value(src, "event.original", "") or ""
+    event_original = _read_elastic_value(src, "event.original", message_value)
+    opnsense_parsed = parse_opnsense_filterlog_message(event_original or message_value)
 
-        if "alert" in event_type:
-            attack_rows.append(row)
-            continue
-        if severity in {1, 2}:
-            attack_rows.append(row)
-            continue
-        if any(k in f"{signature} {category}" for k in [
-            "attack", "exploit", "malware", "trojan", "scan", "shell", "injection", "cve", "brute"
-        ]):
-            attack_rows.append(row)
-            continue
+    action_value = (
+        _read_elastic_value(src, "event.action", "")
+        or _read_elastic_value(src, "opnsense.firewall.action", "")
+        or _read_elastic_value(src, "action", "")
+        or opnsense_parsed.get("action")
+        or "-"
+    )
+    action_value = str(action_value).lower() if action_value not in (None, "") else "-"
+    interface_value = (
+        _read_elastic_value(src, "opnsense.firewall.interface", "")
+        or _read_elastic_value(src, "observer.ingress.interface.name", "")
+        or _read_elastic_value(src, "observer.egress.interface.name", "")
+        or _read_elastic_value(src, "interface.name", "")
+        or opnsense_parsed.get("interface")
+        or "-"
+    )
+    direction_value = (
+        _read_elastic_value(src, "network.direction", "")
+        or _read_elastic_value(src, "opnsense.firewall.direction", "")
+        or opnsense_parsed.get("direction")
+        or "-"
+    )
+    protocol_value = (
+        _read_elastic_value(src, "network.transport", "")
+        or _read_elastic_value(src, "network.protocol", "")
+        or _read_elastic_value(src, "opnsense.firewall.protocol", "")
+        or opnsense_parsed.get("protocol")
+        or "-"
+    )
+    rule_id = (
+        _read_elastic_value(src, "rule.id", "")
+        or _read_elastic_value(src, "opnsense.firewall.rule_id", "")
+        or opnsense_parsed.get("tracker")
+        or ""
+    )
+    rule_value = (
+        _read_elastic_value(src, "rule.name", "")
+        or _read_elastic_value(src, "rule.description", "")
+        or _read_elastic_value(src, "opnsense.firewall.rule", "")
+        or opnsense_parsed.get("rule")
+        or (f"filterlog rule {rule_id}" if rule_id else "-")
+    )
+    timestamp_value = _read_elastic_value(src, "@timestamp", "-")
+    document_id = hit.get("_id", f"event-{index}")
+    source_ip = _read_elastic_value(src, "source.ip", opnsense_parsed.get("source_ip", "-"))
+    source_port = _read_elastic_value(src, "source.port", opnsense_parsed.get("source_port", ""))
+    destination_ip = _read_elastic_value(src, "destination.ip", opnsense_parsed.get("destination_ip", "-"))
+    destination_port = _read_elastic_value(src, "destination.port", opnsense_parsed.get("destination_port", ""))
+    reason = _read_elastic_value(src, "opnsense.firewall.reason", opnsense_parsed.get("reason", "-"))
+    tracker = _read_elastic_value(src, "opnsense.firewall.tracker", opnsense_parsed.get("tracker", "-"))
 
-    return attack_rows
+    return {
+        "id": f"{document_id}-{timestamp_value}-{index}",
+        "_id": document_id,
+        "_index": hit.get("_index", ""),
+        "timestamp": timestamp_value,
+        "event_type": "filterlog",
+        "action": action_value,
+        "interface": interface_value,
+        "direction": direction_value,
+        "protocol": str(protocol_value).lower() if protocol_value not in (None, "") else "-",
+        "source_ip": source_ip,
+        "source_port": source_port,
+        "destination_ip": destination_ip,
+        "destination_port": destination_port,
+        "rule": rule_value,
+        "rule_id": rule_id,
+        "reason": reason,
+        "tracker": tracker,
+        "severity": "-",
+        "category": "OPNsense firewall",
+        "host": _read_elastic_value(src, "host.name", opnsense_parsed.get("host", "-")),
+        "message": message_value or event_original,
+        "raw": src,
+    }
 
+
+def search_firewall_archive_events(
+    target: Dict[str, Any],
+    log_index: str,
+    size: int = 300,
+    minutes: int = 1440,
+    action: str = "",
+    interface: str = "",
+    protocol: str = "",
+    source_ip: str = "",
+    destination_ip: str = "",
+    query_text: str = "",
+) -> List[Dict[str, Any]]:
+    """Small non-cursor query used by the index/SQL helper pages."""
+    safe_index = quote(log_index, safe="*,-_.")
+    body: Dict[str, Any] = {
+        "size": max(1, min(int(size or 300), 1000)),
+        "sort": [{"@timestamp": {"order": "desc", "unmapped_type": "date"}}],
+        "_source": [
+            "@timestamp", "type", "message", "event.*", "host.*", "source.*",
+            "destination.*", "network.*", "observer.*", "rule.*", "opnsense.*", "interface.*"
+        ],
+        "query": _archive_event_query(
+            minutes=minutes, query_text=query_text, action=action, interface=interface,
+            protocol=protocol, source_ip=source_ip, destination_ip=destination_ip,
+        ),
+    }
+    payload = _elastic_post_json(target, f"{_elastic_url(target)}/{safe_index}/_search", body=body, timeout=20)
+    hits = payload.get("hits", {}).get("hits", []) if isinstance(payload.get("hits"), dict) else []
+    return [_archive_event_hit_to_row(hit, index) for index, hit in enumerate(hits)]
+
+
+@app.get("/api/firewalls/{firewall_id}/event-logs/page")
+def get_event_log_archive_page(
+    firewall_id: int, minutes: int = 60, size: int = 100, query: str = "",
+    action: str = "", interface: str = "", protocol: str = "", source: str = "",
+    destination: str = "", cursor: str = "", include_histogram: bool = True,
+    from_ms: Optional[int] = None, to_ms: Optional[int] = None,
+):
+    """Long-term firewall-event view backed only by Elasticsearch."""
+    target = get_firewall_or_404(firewall_id)
+    ensure_elastic_config(target)
+    page_size = max(20, min(int(size or 100), 250))
+    log_index = str(target.get("event_log_index") or "").strip()
+    if not log_index:
+        raise HTTPException(
+            status_code=409,
+            detail="방화벽 이벤트 인덱스가 설정되지 않았습니다. 방화벽 관리에서 OPNsense filterlog 전용 인덱스(예: opnsense-firewall-*)를 설정하세요.",
+        )
+    decoded = _decode_page_cursor(cursor)
+    pit_id = str(decoded.get("pit") or "")
+    search_after = decoded.get("sort") if isinstance(decoded.get("sort"), list) else None
+    if not pit_id:
+        safe_index = quote(log_index, safe="*,-_.")
+        pit_payload = _elastic_post_json(target, f"{_elastic_url(target)}/{safe_index}/_pit?keep_alive=10m", body=None, timeout=10)
+        pit_id = str(pit_payload.get("id") or "")
+        if not pit_id:
+            raise HTTPException(status_code=502, detail="Elasticsearch PIT 생성에 실패했습니다.")
+
+    body: Dict[str, Any] = {
+        "size": page_size, "track_total_hits": True,
+        "pit": {"id": pit_id, "keep_alive": "10m"},
+        "sort": [{"@timestamp": {"order": "desc", "unmapped_type": "date"}}, {"_shard_doc": "desc"}],
+        "_source": ["@timestamp", "type", "message", "event.*", "host.*", "source.*", "destination.*", "network.*", "observer.*", "rule.*", "opnsense.*", "interface.*"],
+        "query": _archive_event_query(minutes, query, action, interface, protocol, source, destination, from_ms, to_ms),
+    }
+    if search_after:
+        body["search_after"] = search_after
+    if include_histogram:
+        body["aggs"] = {"timeline": {"auto_date_histogram": {"field": "@timestamp", "buckets": 30, "minimum_interval": "minute"}}}
+
+    payload = _elastic_post_json(target, f"{_elastic_url(target)}/_search", body=body, timeout=25)
+    current_pit = str(payload.get("pit_id") or pit_id)
+    hits_block = payload.get("hits") if isinstance(payload.get("hits"), dict) else {}
+    hits = hits_block.get("hits") if isinstance(hits_block.get("hits"), list) else []
+    total_value = hits_block.get("total", 0)
+    total = int(total_value.get("value", 0) if isinstance(total_value, dict) else total_value or 0)
+    rows = [_archive_event_hit_to_row(hit, index) for index, hit in enumerate(hits)]
+    next_cursor = ""
+    if len(hits) >= page_size and hits and isinstance(hits[-1].get("sort"), list):
+        next_cursor = _encode_page_cursor({"pit": current_pit, "sort": hits[-1]["sort"]})
+    histogram = None
+    if include_histogram:
+        timeline = payload.get("aggregations", {}).get("timeline", {})
+        buckets = timeline.get("buckets") if isinstance(timeline.get("buckets"), list) else []
+        histogram = {"interval": str(timeline.get("interval") or ""), "buckets": [{"start": int(bucket.get("key", 0)), "count": int(bucket.get("doc_count", 0))} for bucket in buckets]}
+    firewall_actions = {"pass", "block", "deny", "drop", "reject", "allow", "accept"}
+    has_firewall_action = any(str(row.get("action") or "").lower() in firewall_actions for row in rows)
+    schema_warning = ""
+    if total > 0 and rows and not has_firewall_action:
+        schema_warning = (
+            f"현재 이벤트 인덱스({log_index})에 OPNsense firewall action(pass/block) 정보가 없습니다. "
+            "Suricata 공격 인덱스가 아니라 OPNsense filterlog 전용 인덱스를 연결하세요."
+        )
+    return {"rows": rows, "total": total, "page_size": page_size, "page_count": len(rows), "next_cursor": next_cursor,
+            "has_more": bool(next_cursor), "histogram": histogram, "source": "ELK", "view": "firewall_event_archive",
+            "index": log_index, "schema_warning": schema_warning,
+            "range_minutes": max(1, min(int(minutes or 60), 5256000))}
 
 @app.get("/api/firewalls/{firewall_id}/security-alerts")
 def get_security_alerts(
     firewall_id: int,
     minutes: int = 60,
-    size: int = 200,
-    min_risk: int = 0,
+    size: int = 500,
+    query: str = "",
     include_all_events: bool = False,
+    before: str = "",
 ):
+    """Return one ELK page. ``size`` is a per-page limit, not a total history limit.
+
+    Pass ``before`` with the ``next_before`` value from the previous response to
+    keep walking backwards through the selected time range. Pages intentionally
+    overlap at the boundary timestamp; clients should de-duplicate by row id.
+    This avoids the old behaviour where an attack disappeared permanently once
+    more than 1,000 newer raw events arrived.
+    """
     target = get_firewall_or_404(firewall_id)
-    log_index = str(target.get("log_index", "logs-suricata.eve-*"))
-
-    safe_size = max(1, min(int(size or 200), 500))
-    safe_minutes = max(1, min(int(minutes or 60), 10080))
-
-    rows = search_firewall_events(
+    page_size = max(1, min(size, 1000))
+    page_rows = search_firewall_events(
         target=target,
-        log_index=log_index,
-        size=safe_size,
-        minutes=safe_minutes,
-        action="",
-        interface="",
-        query_text="",
+        log_index=target.get("log_index", "logs-suricata.eve-*"),
+        size=page_size,
+        minutes=max(1, min(minutes, 5256000)),
+        query_text=query,
+        before_timestamp=before,
     )
+    decorated = list({r["id"]: r for r in map(decorate, page_rows)}.values())
+    scanned = len(decorated)
+    rows = decorated if include_all_events else [row for row in decorated if is_attack(row)]
 
-    source_rows = rows if include_all_events else _security_filter_attack_rows(rows)
-    alerts = _security_build_alerts(source_rows)
-    alerts = [alert for alert in alerts if int(alert.get("risk", {}).get("score", 0)) >= int(min_risk or 0)]
-
-    level_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
-    status_counts: Dict[str, int] = {}
-
-    for alert in alerts:
-        level = alert.get("risk", {}).get("level", "low")
-        level_counts[level] = level_counts.get(level, 0) + 1
-        status = alert.get("status", "detected")
-        status_counts[status] = status_counts.get(status, 0) + 1
+    next_before = ""
+    if page_rows:
+        next_before = str(page_rows[-1].get("timestamp") or "")
 
     return {
+        "rows": rows,
+        "scanned": scanned,
+        "source": "ELK",
         "firewall": serialize_firewall(target),
-        "rows": alerts,
-        "summary": {
-            "total": len(alerts),
-            "level_counts": level_counts,
-            "status_counts": status_counts,
-            "auto_block_candidates": sum(1 for a in alerts if a.get("risk", {}).get("score", 0) >= 90),
-            "approval_required": sum(1 for a in alerts if a.get("risk", {}).get("score", 0) >= 70),
-        },
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "page_size": page_size,
+        "next_before": next_before,
+        "has_more": bool(next_before and len(page_rows) >= page_size),
     }
 
 
 @app.post("/api/firewalls/{firewall_id}/security-alerts/{alert_id}/block")
-def block_security_alert(firewall_id: int, alert_id: str, body: SecurityBlockBody):
+def manual_block(firewall_id: int, alert_id: str, body: ManualBlockBody, request: Request):
     target = get_firewall_or_404(firewall_id)
-    source_ip = str(body.source_ip or "").strip()
-
-    if not source_ip:
-        raise HTTPException(status_code=400, detail="차단할 source_ip가 필요합니다.")
-
     try:
-        ipaddress.ip_address(source_ip)
-    except Exception:
-        raise HTTPException(status_code=400, detail=f"올바르지 않은 IP 주소입니다: {source_ip}")
+        service = _manual_service(target)
+        protected = _protected_manual_addresses()
+        # Include globally configured ELK when this target inherits it.
+        effective_target = {**target, "elastic_url": _elastic_url(target)}
+        service.target = effective_target
+        ip = service.validate_address(body.source_ip, body.force, protected,
+                                      request.client.host if request.client else None)
+    except (ResponseError, ValueError, OSError) as exc:
+        raise HTTPException(400, getattr(exc, "detail", str(exc)))
+    try:
+        with MANUAL_BLOCK_LOCK:
+            result = service.change(ip, True)
+            record = _manual_audit(firewall_id, ip, "block", service, result, alert_id)
+        return {**record, "message": f"{ip} 차단 규칙과 Alias 테이블 적용을 확인했습니다."}
+    except ResponseError as exc:
+        raise HTTPException(502, exc.detail)
 
-    if _security_is_private_or_reserved(source_ip) and not body.force:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "사설/예약/로컬 IP는 기본적으로 자동 차단하지 않습니다. "
-                "실습 환경에서 강제로 차단하려면 force=true로 요청하세요."
-            ),
-        )
 
-    alias_name = str(body.alias_name or DEFAULT_SECURITY_ALIAS).strip() or DEFAULT_SECURITY_ALIAS
-    safe_alias = _security_quote(alias_name, safe="")
+# ============================================================
+# V32-FINAL ML -> Elasticsearch enrichment pipeline
+# ============================================================
+_ML_PIPELINE_STATE_LOCK = threading.Lock()
+_ML_PIPELINE_STATE: Dict[str, Any] = {
+    "running": False,
+    "thread_alive": False,
+    "started_at": None,
+    "last_cycle_at": None,
+    "last_error": "",
+    "firewalls": {},
+}
+_ML_PIPELINE_STOP = threading.Event()
+_ML_PIPELINE_THREAD: Optional[threading.Thread] = None
 
-    result = opnsense_request(
-        target,
-        "POST",
-        f"/api/firewall/alias_util/add/{safe_alias}",
-        json_data={"address": source_ip},
+
+def _ml_state_snapshot() -> Dict[str, Any]:
+    with _ML_PIPELINE_STATE_LOCK:
+        return json.loads(json.dumps(_ML_PIPELINE_STATE, ensure_ascii=False, default=str))
+
+
+def _ml_update_state(**kwargs) -> None:
+    with _ML_PIPELINE_STATE_LOCK:
+        _ML_PIPELINE_STATE.update(kwargs)
+
+
+def _ml_update_firewall_state(firewall_id: int, payload: Dict[str, Any]) -> None:
+    with _ML_PIPELINE_STATE_LOCK:
+        fw_state = _ML_PIPELINE_STATE.setdefault("firewalls", {})
+        fw_state[str(firewall_id)] = payload
+
+
+def _run_ml_pipeline_for_target(
+    target: Dict[str, Any],
+    *,
+    batch_size: int,
+    lookback_minutes: int,
+    force: bool = False,
+) -> Dict[str, Any]:
+    ensure_elastic_config(target)
+    config = ml_pipeline_config()
+    result = run_pipeline_batch(
+        target=target,
+        base_url=_elastic_url(target),
+        log_index=str(target.get("log_index") or "logs-suricata.eve-*"),
+        headers=elastic_headers(target),
+        auth=elastic_auth(target),
+        verify_ssl=_elastic_verify_ssl(target),
+        batch_size=max(1, min(int(batch_size), 500)),
+        lookback_minutes=max(1, min(int(lookback_minutes), 5256000)),
+        force=bool(force),
+        mark_skipped=bool(config.get("mark_skipped", True)),
     )
+    result["completed_at"] = int(time.time())
+    _ml_update_firewall_state(int(target.get("id", 0)), result)
+    return result
 
-    apply_result = None
+
+def _ml_pipeline_worker() -> None:
+    config = ml_pipeline_config()
+    _ml_update_state(
+        running=True,
+        thread_alive=True,
+        started_at=int(time.time()),
+        last_error="",
+    )
     try:
-        apply_result = safe_apply_firewall(target)
-    except Exception as e:
-        apply_result = {"ok": False, "error": str(e)}
+        while not _ML_PIPELINE_STOP.is_set():
+            config = ml_pipeline_config()
+            if not config.get("enabled", True):
+                _ML_PIPELINE_STOP.wait(max(1, int(config.get("interval_seconds", 5))))
+                continue
 
-    now = int(time.time())
-    saved = _security_load_json(SECURITY_ALERTS_DB, {})
-    if not isinstance(saved, dict):
-        saved = {}
+            for target in load_firewalls():
+                if _ML_PIPELINE_STOP.is_set():
+                    break
+                try:
+                    if not _elastic_url(target):
+                        continue
+                    _run_ml_pipeline_for_target(
+                        target,
+                        batch_size=int(config.get("batch_size", 100)),
+                        lookback_minutes=int(config.get("lookback_minutes", 180)),
+                        force=False,
+                    )
+                except Exception as exc:
+                    error_text = f"{type(exc).__name__}: {exc}"
+                    _ml_update_firewall_state(
+                        int(target.get("id", 0)),
+                        {
+                            "firewall_id": target.get("id"),
+                            "firewall_name": target.get("name"),
+                            "error": error_text,
+                            "completed_at": int(time.time()),
+                        },
+                    )
+                    _ml_update_state(last_error=error_text)
 
-    previous = saved.get(alert_id, {})
-    response = {
-        "type": "alias_block",
-        "target_ip": source_ip,
-        "alias_name": alias_name,
-        "reason": body.reason,
-        "created_at": now,
-        "opnsense_result": result,
-        "apply": apply_result,
-    }
+            _ml_update_state(last_cycle_at=int(time.time()))
+            _ML_PIPELINE_STOP.wait(max(1, int(config.get("interval_seconds", 5))))
+    finally:
+        _ml_update_state(running=False, thread_alive=False)
 
-    saved[alert_id] = {
-        **previous,
-        "id": alert_id,
-        "status": "blocked",
-        "response": response,
-        "updated_at": now,
-    }
-    _security_save_json(SECURITY_ALERTS_DB, saved)
 
-    blocked = _security_load_json(SECURITY_BLOCKED_DB, [])
-    if not isinstance(blocked, list):
-        blocked = []
+@app.on_event("startup")
+def start_ml_pipeline_worker():
+    global _ML_PIPELINE_THREAD
+    config = ml_pipeline_config()
+    if not config.get("enabled", True):
+        _ml_update_state(running=False, thread_alive=False)
+        return
+    if _ML_PIPELINE_THREAD is not None and _ML_PIPELINE_THREAD.is_alive():
+        return
 
-    blocked.append({
-        "firewall_id": firewall_id,
-        "alert_id": alert_id,
-        "ip": source_ip,
-        "alias_name": alias_name,
-        "reason": body.reason,
-        "created_at": now,
-        "active": True,
-    })
-    _security_save_json(SECURITY_BLOCKED_DB, blocked)
+    status = ml_model_status(load_model=True)
+    if not status.get("ready"):
+        _ml_update_state(
+            running=False,
+            thread_alive=False,
+            last_error=status.get("load_error") or "V32 model not ready",
+        )
+        return
 
+    _ML_PIPELINE_STOP.clear()
+    _ML_PIPELINE_THREAD = threading.Thread(
+        target=_ml_pipeline_worker,
+        name="v32-elk-ml-pipeline",
+        daemon=True,
+    )
+    _ML_PIPELINE_THREAD.start()
+
+
+@app.on_event("shutdown")
+def stop_ml_pipeline_worker():
+    _ML_PIPELINE_STOP.set()
+
+
+@app.get("/api/ml/model-status")
+def get_ml_model_status():
     return {
-        "ok": True,
-        "message": "차단 Alias에 IP를 추가했습니다.",
-        "alert_id": alert_id,
-        "source_ip": source_ip,
-        "alias_name": alias_name,
-        "result": result,
-        "apply": apply_result,
+        "model": ml_model_status(load_model=True),
+        "pipeline": ml_pipeline_config(),
+        "worker": _ml_state_snapshot(),
     }
 
 
-@app.get("/api/firewalls/{firewall_id}/security-blocked-ips")
-def list_security_blocked_ips(firewall_id: int):
-    blocked = _security_load_json(SECURITY_BLOCKED_DB, [])
-    if not isinstance(blocked, list):
-        blocked = []
+@app.post("/api/ml/predict")
+def predict_ml_payload(body: MlPredictBody):
+    row: Dict[str, Any] = {"raw": {"payload": body.payload}}
+    if body.flow:
+        row["raw"]["flow"] = body.flow
+    result = ml_predict_event(row)
+    if not result.get("available"):
+        raise HTTPException(status_code=422, detail=result)
+    return result
 
+
+@app.get("/api/firewalls/{firewall_id}/ml-pipeline/status")
+def get_firewall_ml_pipeline_status(firewall_id: int):
+    target = get_firewall_or_404(firewall_id)
+    state = _ml_state_snapshot()
     return {
-        "rows": [item for item in blocked if int(item.get("firewall_id", 0)) == firewall_id],
+        "firewall": serialize_firewall(target),
+        "model": ml_model_status(load_model=False),
+        "config": ml_pipeline_config(),
+        "worker": {
+            "running": state.get("running", False),
+            "thread_alive": state.get("thread_alive", False),
+            "last_cycle_at": state.get("last_cycle_at"),
+            "last_error": state.get("last_error", ""),
+        },
+        "last_result": state.get("firewalls", {}).get(str(firewall_id), {}),
     }
+
+
+@app.get("/api/firewalls/{firewall_id}/ml-pipeline/diagnostics")
+def get_firewall_ml_pipeline_diagnostics(firewall_id: int, lookback_minutes: int = 180):
+    target = get_firewall_or_404(firewall_id)
+    ensure_elastic_config(target)
+    try:
+        return pipeline_diagnostics(
+            base_url=_elastic_url(target),
+            log_index=str(target.get("log_index") or "logs-suricata.eve-*"),
+            headers=elastic_headers(target),
+            auth=elastic_auth(target),
+            verify_ssl=_elastic_verify_ssl(target),
+            lookback_minutes=max(1, min(int(lookback_minutes), 5256000)),
+        )
+    except requests.exceptions.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"ML pipeline 진단 실패: {exc}")
+
+
+@app.post("/api/firewalls/{firewall_id}/ml-pipeline/run")
+def run_firewall_ml_pipeline(firewall_id: int, body: MlPipelineRunBody):
+    target = get_firewall_or_404(firewall_id)
+    try:
+        return _run_ml_pipeline_for_target(
+            target,
+            batch_size=body.batch_size,
+            lookback_minutes=body.lookback_minutes,
+            force=body.force,
+        )
+    except requests.exceptions.ConnectTimeout:
+        raise HTTPException(status_code=504, detail=f"Elastic ML pipeline 연결 시간 초과: {_elastic_url(target)}")
+    except requests.exceptions.ReadTimeout:
+        raise HTTPException(status_code=504, detail=f"Elastic ML pipeline 응답 시간 초과: {_elastic_url(target)}")
+    except requests.exceptions.RequestException as exc:
+        response_text = ""
+        try:
+            response_text = exc.response.text[:1000] if exc.response is not None else ""
+        except Exception:
+            pass
+        raise HTTPException(status_code=502, detail=f"Elastic ML pipeline 요청 실패: {exc} {response_text}".strip())
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"ML pipeline 실행 실패: {type(exc).__name__}: {exc}")
+
+
+# Attack research uses exactly the same detection page API/index/filter as Live.
+class AttackSearchBody(BaseModel):
+    minutes: int = Field(default=60, ge=1, le=10080)
+    result: str = 'attack'
+    query: str = ''
+    sql: str = Field(default='SELECT * FROM logs ORDER BY timestamp DESC LIMIT 100', max_length=10000)
+
+
+@app.post('/api/firewalls/{firewall_id}/security-alerts/search')
+def search_attack_logs(firewall_id: int, body: AttackSearchBody):
+    import sqlite3
+    try:
+        from .attack_search import search_rows
+    except ImportError:
+        from attack_search import search_rows
+    if body.result not in {'attack', 'all', 'normal'}:
+        raise HTTPException(400, '결과 필터가 올바르지 않습니다.')
+    rows, cursor, total, more = [], '', 0, False
+    # Fixed time bounds keep all fetched pages in the same search interval.
+    until = int(time.time() * 1000)
+    for _ in range(20):
+        page = get_security_alert_page(firewall_id=firewall_id, minutes=body.minutes,
+            size=250, query=body.query, result=body.result, cursor=cursor,
+            include_histogram=False, from_ms=until-body.minutes*60000, to_ms=until)
+        rows.extend(page.get('rows', []))
+        total = page.get('total', 0)
+        more = bool(page.get('has_more'))
+        cursor = page.get('next_cursor', '')
+        if not more or not cursor: break
+    try:
+        result = search_rows(rows, body.sql)
+    except (sqlite3.Error, ValueError) as exc:
+        raise HTTPException(400, f'SQL 검색 오류: {exc}')
+    return {**result, 'scanned': len(rows), 'total': total, 'source_truncated': more,
+            'source': 'ELK', 'minutes': body.minutes, 'index': get_firewall_or_404(firewall_id).get('log_index', '')}
+
+
+@app.get('/api/firewalls/{firewall_id}/automatic-blocks')
+def list_automatic_blocks(firewall_id: int):
+    target = get_firewall_or_404(firewall_id)
+    alias = os.getenv(f'SECURITY_AUTO_BLOCK_ALIAS_{firewall_id}', os.getenv('SECURITY_AUTO_BLOCK_ALIAS', '')).strip()
+    manual_alias = os.getenv('SECURITY_BLOCK_ALIAS', 'blocked_attackers').strip() or 'blocked_attackers'
+    if not alias:
+        return {'rows': [], 'available': False, 'message': '자동 차단 전용 Alias가 연결되지 않았습니다. 자동 차단 엔진에서 사용하는 Alias를 설정하세요.'}
+    if alias == manual_alias:
+        raise HTTPException(400, '수동·자동 차단 Alias가 같으면 차단 유형을 구분할 수 없습니다. 자동 전용 Alias를 지정하세요.')
+    try:
+        with MANUAL_BLOCK_LOCK:
+            service = ManualResponse(opnsense_request, target, alias)
+            _, config = service.alias_config()
+            if not config:
+                return {'rows': [], 'alias': alias, 'available': False, 'message': '설정한 자동 차단 Alias가 OPNsense에 없습니다.'}
+            entries = service.table()
+            editable = config.get('type') == 'host' and config.get('enabled') == '1'
+            configured = set()
+            for entry in contents(config.get('content', '')):
+                try: configured.add(str(ipaddress.ip_address(entry)))
+                except ValueError: editable = False
+            rows = []
+            for entry in sorted(entries):
+                network = ipaddress.ip_network(entry)
+                ip = str(network.network_address) if network.prefixlen == network.max_prefixlen else entry
+                rows.append({'ip': ip, 'alias': alias, 'status': 'table_present',
+                             'can_remove': editable and ip in configured})
+            return {'rows': rows, 'alias': alias, 'available': True, 'editable': editable,
+                    'message': '자동 차단 전용 Alias의 실제 테이블입니다. 자동화 규칙 적용 여부와 차단 시각은 이 API에서 검증하지 않습니다.'}
+    except ResponseError as exc:
+        raise HTTPException(502, exc.detail)
+
+
+
+def _automatic_edit_service(firewall_id):
+    target = get_firewall_or_404(firewall_id)
+    alias = os.getenv(f'SECURITY_AUTO_BLOCK_ALIAS_{firewall_id}', os.getenv('SECURITY_AUTO_BLOCK_ALIAS', '')).strip()
+    manual = os.getenv('SECURITY_BLOCK_ALIAS', 'blocked_attackers').strip() or 'blocked_attackers'
+    if not alias or alias == manual:
+        raise HTTPException(400, '별도의 자동 차단 Alias를 먼저 연결하세요.')
+    service = ManualResponse(opnsense_request, {**target, 'elastic_url': _elastic_url(target)}, alias)
+    _, config = service.alias_config()
+    if not config:
+        raise HTTPException(409, '연결된 자동 차단 Alias가 없습니다.')
+    if config.get('type') != 'host' or config.get('enabled') != '1':
+        raise HTTPException(409, '직접 추가·해제는 활성화된 Host 유형 Alias에서 지원합니다.')
+    return service
+
+
+@app.post('/api/firewalls/{firewall_id}/automatic-blocks')
+def add_automatic_block(firewall_id: int, body: ManualBlockBody, request: Request):
+    try:
+        with MANUAL_BLOCK_LOCK:
+            service = _automatic_edit_service(firewall_id)
+            try:
+                ip = service.validate_address(body.source_ip, body.force, _protected_manual_addresses(),
+                    request.client.host if request.client else None)
+            except (ResponseError, ValueError, OSError) as exc:
+                raise HTTPException(400, getattr(exc, 'detail', str(exc)))
+            result = service.change(ip, True)
+        return {**result, 'ip': ip, 'alias': service.alias,
+                'message': f'{ip}를 자동 차단 Alias에 추가하고 차단 규칙 적용을 확인했습니다.'}
+    except ResponseError as exc:
+        raise HTTPException(502, exc.detail)
+
+
+@app.delete('/api/firewalls/{firewall_id}/automatic-blocks/{ip_address}')
+def remove_automatic_block(firewall_id: int, ip_address: str):
+    try:
+        ip = str(ipaddress.ip_address(ip_address.strip()))
+    except ValueError:
+        raise HTTPException(400, '해제할 단일 IP 주소가 올바르지 않습니다.')
+    try:
+        with MANUAL_BLOCK_LOCK:
+            service = _automatic_edit_service(firewall_id)
+            result = service.change(ip, False)
+        return {**result, 'ip': ip, 'alias': service.alias,
+                'message': f'{ip}를 자동 차단 Alias에서 해제했습니다.',
+                'engine_notice': '자동 차단 엔진이 다시 탐지하면 재등록할 수 있습니다.'}
+    except ResponseError as exc:
+        raise HTTPException(502, exc.detail)

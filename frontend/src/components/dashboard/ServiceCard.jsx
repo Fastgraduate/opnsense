@@ -1,31 +1,29 @@
-function ServiceCard({ autoRefresh }) {
-  return (
-    <div className="card service-card">
-      <div className="card-title">서비스</div>
-      <div className="service-list">
-        <div className="service-row">
+import { twc } from "../../lib/twc";
+function ServiceCard({
+  autoRefresh
+}) {
+  return <div className={twc("card service-card")}>
+      <div className={twc("card-title")}>서비스</div>
+      <div className={twc("service-list")}>
+        <div className={twc("service-row")}>
           <span>Packet Filter</span>
-          <span className="service-badge running">RUN</span>
+          <span className={twc("service-badge running")}>RUN</span>
         </div>
-        <div className="service-row">
+        <div className={twc("service-row")}>
           <span>Web GUI</span>
-          <span className="service-badge running">RUN</span>
+          <span className={twc("service-badge running")}>RUN</span>
         </div>
-        <div className="service-row">
+        <div className={twc("service-row")}>
           <span>Rules API</span>
-          <span className="service-badge running">RUN</span>
+          <span className={twc("service-badge running")}>RUN</span>
         </div>
-        <div className="service-row">
+        <div className={twc("service-row")}>
           <span>Auto Refresh</span>
-          <span
-            className={`service-badge ${autoRefresh ? 'running' : 'stopped'}`}
-          >
+          <span className={twc(`service-badge ${autoRefresh ? 'running' : 'stopped'}`)}>
             {autoRefresh ? 'ON' : 'OFF'}
           </span>
         </div>
       </div>
-    </div>
-  )
+    </div>;
 }
-
-export default ServiceCard
+export default ServiceCard;
