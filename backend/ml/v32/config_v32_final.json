@@ -1,0 +1,193 @@
+{
+  "version": "V32-FINAL",
+  "release_status": "FINAL_MODEL_FROZEN",
+  "release_date": "2026-09-09",
+  "model_file": "ttp_v32_final_7class_bundle.joblib",
+  "code_file": "final_model.py",
+  "lineage": {
+    "validated_parent": "V31-final",
+    "model_weights_changed_from_v31": false,
+    "routing_parameters_changed_from_v31": false,
+    "purpose": "final release freeze, packaging hardening, reproducible integrity checks, removal of legacy relabel/retrain code from deployment surface"
+  },
+  "architecture": {
+    "stage1": [
+      "Normal",
+      "Alert"
+    ],
+    "module_a": [
+      "Non_Scan",
+      "HOST_Scan",
+      "Vulnerability_Scan"
+    ],
+    "module_b": [
+      "Cross_Site_Scripting",
+      "SQL_Injection",
+      "Path_Disclosure",
+      "System_Cmd_Execution"
+    ]
+  },
+  "routing": {
+    "stage1": "Normal vs Alert",
+    "alert_route": "Module A flow/session gate",
+    "module_a": "Non_Scan vs HOST_Scan vs Vulnerability_Scan",
+    "non_scan_route": "Module B payload classifier",
+    "module_b": [
+      "Cross_Site_Scripting",
+      "SQL_Injection",
+      "Path_Disclosure",
+      "System_Cmd_Execution"
+    ]
+  },
+  "validation": {
+    "status": "PASS_WITH_DOCUMENTED_E2E_DATA_GAP",
+    "headline_type": "component-level summary; NOT a full same-event paired end-to-end seven-class accuracy estimate",
+    "component_macro_f1_mean": 0.9816745598779368,
+    "component_macro_f1_std": 0.004199361824923339,
+    "component_worst_class": "SQL_Injection",
+    "component_worst_f1_mean": 0.9457258066982229,
+    "per_class": {
+      "Normal": {
+        "precision": 0.9981497306848949,
+        "recall": 0.9988888888888889,
+        "f1": 0.9985191080369656,
+        "f1_std": 0.00019596430159232189
+      },
+      "HOST_Scan": {
+        "precision": 0.990909090909091,
+        "recall": 0.9704761904761906,
+        "f1": 0.9799444726393409,
+        "f1_std": 0.01946627388167579
+      },
+      "Vulnerability_Scan": {
+        "precision": 0.9903390169563666,
+        "recall": 0.9847014925373134,
+        "f1": 0.9874983067170378,
+        "f1_std": 0.002109834142745691
+      },
+      "Cross_Site_Scripting": {
+        "precision": 0.9898795679074304,
+        "recall": 0.9954545454545455,
+        "f1": 0.9926179348334442,
+        "f1_std": 0.004629860220380034
+      },
+      "SQL_Injection": {
+        "precision": 0.9447268061076086,
+        "recall": 0.9477810650887573,
+        "f1": 0.9457258066982229,
+        "f1_std": 0.01229340158772976
+      },
+      "Path_Disclosure": {
+        "precision": 0.9819105430950981,
+        "recall": 0.9958940653717979,
+        "f1": 0.9888226886308654,
+        "f1_std": 0.006412963866990248
+      },
+      "System_Cmd_Execution": {
+        "precision": 0.985083596685125,
+        "recall": 0.9722469858781801,
+        "f1": 0.9785936015896809,
+        "f1_std": 0.005237636858726544
+      }
+    },
+    "stage1_protocol": "5-seed repeated validation inherited unchanged from validated V31 component",
+    "module_a_protocol": "nested outer 5-fold; inner threshold selection; deployment threshold 0.55",
+    "module_a_macro_f1_mean": 0.9848347987216218,
+    "module_a_macro_f1_std": 0.007391604298198981,
+    "module_b_protocol": "scanner-origin removed; exact/template cross-label conflicts and semantic ambiguity quarantined; template-group-disjoint 5-fold",
+    "module_b_macro_f1_mean": 0.9764400079380533,
+    "module_b_macro_f1_std": 0.005422287207625687,
+    "external_domain_macro_f1": 0.5753342690174441,
+    "external_domain_per_class_f1": {
+      "Cross_Site_Scripting": 0.9424808393481657,
+      "SQL_Injection": 0.8566005904681568,
+      "Path_Disclosure": 0.27286267500744715,
+      "System_Cmd_Execution": 0.22939297124600638
+    },
+    "paired_vulnerability_diagnostic": {
+      "nikto_flows": 145,
+      "nikto_recall": 1.0,
+      "nuclei_flows": 5861,
+      "nuclei_recall": 1.0,
+      "independent_final_test": false,
+      "note": "Same source PCAP family contributed to the flow dataset; diagnostic verifies feature-schema/routing consistency only."
+    },
+    "full_7class_same_event_paired_test_available": false,
+    "full_7class_end_to_end_score_claim_allowed": false
+  },
+  "targets": {
+    "component_macro_f1_target": 0.95,
+    "component_worst_f1_target": 0.9,
+    "component_macro_target_met": true,
+    "component_worst_target_met": true,
+    "full_end_to_end_target_status": "NOT_MEASURED_DUE_TO_MISSING_SAME_EVENT_FLOW_PAYLOAD_PAIRS"
+  },
+  "data_governance": {
+    "module_b_training_rows": 7545,
+    "scanner_origin_rows_excluded": 9066,
+    "semantic_ambiguity_rows_quarantined": 567,
+    "template_conflict_rows_quarantined": 313,
+    "relabeling_used": false,
+    "provenance_used_as_model_feature": false,
+    "module_a_forbidden_features": [
+      "src_paths",
+      "src_reqs",
+      "tool"
+    ]
+  },
+  "release_acceptance": {
+    "model_load": "PASS",
+    "golden_7class_router_test": "PASS_7_OF_7",
+    "v31_v32_prediction_equivalence": "PASS_1750_ROWS",
+    "hash_manifest": "PASS",
+    "component_targets": "PASS",
+    "methodology_caveat_documented": "PASS",
+    "decision": "ACCEPTED_AS_FINAL_DEPLOYMENT_AND_DEMONSTRATION_MODEL"
+  },
+  "claims": {
+    "allowed": [
+      "Stage/component-level validation meets Macro-F1 >= 0.95 and worst-class F1 >= 0.90.",
+      "Module A was evaluated with nested threshold selection.",
+      "Module B validation is scanner-origin-free and template-group-disjoint.",
+      "The final release is prediction-equivalent to the validated V31 model.",
+      "The real Nikto/Nuclei paired diagnostic verifies Flow+Payload routing compatibility for Vulnerability_Scan."
+    ],
+    "not_allowed": [
+      "Do not call 0.9817 a full same-event seven-class end-to-end Macro-F1.",
+      "Do not claim the external-domain pool achieves the internal validation score.",
+      "Do not claim all future/unknown attack traffic is detected at the component-validation rate."
+    ]
+  },
+  "hashes": {
+    "model_sha256": "8fd7dd64853d01c674e690c8911bf085143c26a001508a873ab1680206db9790",
+    "code_sha256": "45ffef928d9ad640bb60f1cc412daea2d24bdbfdd7d5f4589a5e182beee80fa6",
+    "curation_policy_sha256": "68c94d4f7916fc6705fdf563a889a7dfc9c2858479e0aab111597aa389eb7ee5",
+    "module_b_clean_data_sha256": "9368037b58b54ae4b648841a0ce86c43b8f8a9f4a031116e2bc041f5280a0e49"
+  },
+  "environment": {
+    "python": "3.13.5",
+    "scikit_learn": "1.8.0",
+    "pandas": "2.2.3",
+    "numpy": "2.3.5",
+    "joblib": "1.5.3"
+  },
+  "display_patch": {
+    "name": "V32-FINAL-SIMPLE-DISPLAY",
+    "model_weights_changed": false,
+    "routing_changed": false,
+    "prediction_changed": false,
+    "secondary_show_below_percent": 85.0,
+    "ui_fields": [
+      "main_result_display",
+      "secondary_result_display",
+      "result_display",
+      "show_secondary"
+    ],
+    "behavior": "Show only the primary class and confidence when >=85%. Below 85%, show exactly one runner-up candidate.",
+    "confidence_semantics": {
+      "stage1": "predict_proba percentage",
+      "module_a": "predict_proba percentage",
+      "module_b": "softmax-normalized LinearSVC decision scores for display/ranking; NOT calibrated probability"
+    }
+  }
+}

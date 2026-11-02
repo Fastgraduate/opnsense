@@ -1,17 +1,16 @@
-function RuleTable({ rules, loading, handleDeleteRule }) {
-  return (
-    <div className="card rules-card">
-      <div className="section-header">
+import { twc } from "../../lib/twc";
+function RuleTable({
+  rules,
+  loading,
+  handleDeleteRule
+}) {
+  return <div className={twc("card rules-card")}>
+      <div className={twc("section-header")}>
         <h3>🔥 방화벽 룰 목록</h3>
-        <span className="rule-count">총 {rules.length}개</span>
+        <span className={twc("rule-count")}>총 {rules.length}개</span>
       </div>
 
-      {loading ? (
-        <p className="loading">로딩 중...</p>
-      ) : rules.length === 0 ? (
-        <p className="empty-text">현재 생성된 자동 규칙이 없습니다.</p>
-      ) : (
-        <div className="table-wrap">
+      {loading ? <p className={twc("loading")}>로딩 중...</p> : rules.length === 0 ? <p className={twc("empty-text")}>현재 생성된 자동 규칙이 없습니다.</p> : <div className={twc("table-wrap")}>
           <table>
             <thead>
               <tr>
@@ -26,8 +25,7 @@ function RuleTable({ rules, loading, handleDeleteRule }) {
               </tr>
             </thead>
             <tbody>
-              {rules.map((rule) => (
-                <tr key={rule.uuid}>
+              {rules.map(rule => <tr key={rule.uuid}>
                   <td>{rule.description || '-'}</td>
                   <td>{rule.action || '-'}</td>
                   <td>{rule.interface || '-'}</td>
@@ -42,23 +40,14 @@ function RuleTable({ rules, loading, handleDeleteRule }) {
                     {rule.destination_port ? `:${rule.destination_port}` : ''}
                   </td>
                   <td>
-                    <button
-                      className="delete-btn"
-                      onClick={() =>
-                        handleDeleteRule(rule.uuid, rule.description)
-                      }
-                    >
+                    <button className={twc("delete-btn")} onClick={() => handleDeleteRule(rule.uuid, rule.description)}>
                       ❌ 삭제
                     </button>
                   </td>
-                </tr>
-              ))}
+                </tr>)}
             </tbody>
           </table>
-        </div>
-      )}
-    </div>
-  )
+        </div>}
+    </div>;
 }
-
-export default RuleTable
+export default RuleTable;

@@ -1,111 +1,447 @@
+@import url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/variable/pretendardvariable-dynamic-subset.css");
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
-  --text: #6b6375;
-  --text-h: #08060d;
-  --bg: #fff;
-  --border: #e5e4e7;
-  --code-bg: #f4f3ec;
-  --accent: #aa3bff;
-  --accent-bg: rgba(170, 59, 255, 0.1);
-  --accent-border: rgba(170, 59, 255, 0.5);
-  --social-bg: rgba(244, 243, 236, 0.5);
-  --shadow:
-    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
-
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, Consolas, monospace;
-
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
-  color-scheme: light dark;
-  color: var(--text);
-  background: var(--bg);
+  --font-body: "Pretendard Variable", Pretendard, Inter, "Noto Sans KR", "Apple SD Gothic Neo", system-ui, -apple-system, sans-serif;
+  --font-heading: var(--font-body);
+  font-family: var(--font-body);
+  color: #182033;
+  background: #eef1fb;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-
-  @media (max-width: 1024px) {
-    font-size: 16px;
-  }
+  --bg: #eef1fb;
+  --surface: rgba(255, 255, 255, 0.64);
+  --surface-strong: rgba(255, 255, 255, 0.84);
+  --surface-soft: rgba(248, 250, 252, 0.54);
+  --card-bg: rgba(255, 255, 255, 0.82);
+  --input-bg: rgba(249, 250, 255, 0.96);
+  --border: rgba(255, 255, 255, 0.64);
+  --border-soft: rgba(148, 163, 184, 0.20);
+  --text: #10172a;
+  --text-main: #182033;
+  --text-muted: #64748b;
+  --text-soft: #94a3b8;
+  --accent: #7c6cff;
+  --accent-dark: #6d4aff;
+  --accent-soft: rgba(124, 108, 255, 0.14);
+  --accent-pale: rgba(245, 243, 255, 0.64);
+  --danger: #e11d48;
+  --danger-dark: #be123c;
+  --danger-soft: rgba(255, 228, 230, 0.68);
+  --danger-border: rgba(251, 113, 133, 0.28);
+  --success: #059669;
+  --success-soft: rgba(209, 250, 229, 0.62);
+  --warning: #d97706;
+  --warning-soft: rgba(254, 243, 199, 0.68);
+  --info: #2563eb;
+  --info-soft: rgba(219, 234, 254, 0.66);
+  --shadow-sm: 0 8px 24px rgba(31, 38, 70, 0.06);
+  --shadow-md: 0 18px 44px rgba(31, 38, 70, 0.09);
+  --shadow-lg: 0 30px 80px rgba(31, 38, 70, 0.14);
+  --radius-sm: 14px;
+  --radius-md: 18px;
+  --radius-lg: 22px;
+  --radius-xl: 26px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #16171d;
-    --border: #2e303a;
-    --code-bg: #1f2028;
-    --accent: #c084fc;
-    --accent-bg: rgba(192, 132, 252, 0.15);
-    --accent-border: rgba(192, 132, 252, 0.5);
-    --social-bg: rgba(47, 48, 58, 0.5);
-    --shadow:
-      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
-  }
+:root.dark {
+  color: #dce5f5;
+  background: #080b16;
+  --bg: #080b16;
+  --surface: rgba(12, 20, 38, 0.86);
+  --surface-strong: rgba(10, 17, 34, 0.94);
+  --surface-soft: rgba(24, 35, 58, 0.78);
+  --card-bg: rgba(12, 20, 38, 0.88);
+  --input-bg: rgba(18, 28, 49, 0.90);
+  --border: rgba(255, 255, 255, 0.16);
+  --border-soft: rgba(255, 255, 255, 0.12);
+  --text: #f8fbff;
+  --text-main: #f3f7ff;
+  --text-muted: #bdc8dc;
+  --text-soft: #98a8c1;
+  --accent: #a99cff;
+  --accent-dark: #c4b5fd;
+  --accent-soft: rgba(139, 92, 246, 0.18);
+  --accent-pale: rgba(88, 28, 135, 0.14);
+  --danger-soft: rgba(159, 18, 57, 0.17);
+  --danger-border: rgba(251, 113, 133, 0.20);
+  --success-soft: rgba(5, 150, 105, 0.14);
+  --warning-soft: rgba(217, 119, 6, 0.14);
+  --info-soft: rgba(37, 99, 235, 0.14);
+  --shadow-sm: 0 8px 28px rgba(0, 0, 0, 0.20);
+  --shadow-md: 0 20px 52px rgba(0, 0, 0, 0.28);
+  --shadow-lg: 0 36px 100px rgba(0, 0, 0, 0.40);
+  --log-card: rgba(9, 16, 31, 0.88);
+  --log-border: rgba(148, 163, 184, 0.22);
+  --log-border-strong: rgba(148, 163, 184, 0.34);
+  --log-text: #e8f0ff;
+  --log-muted: #aebbd2;
+  --log-sub: #c9d5e8;
+  --log-primary: #8ab4ff;
+  --log-primary-soft: rgba(59, 130, 246, 0.20);
+  --log-green: #34d399;
+  --log-shadow: 0 20px 50px rgba(0, 0, 0, 0.28);
+}
 
-  #social .button-icon {
-    filter: invert(1) brightness(2);
-  }
+html {
+  min-width: 320px;
+  min-height: 100%;
+  background: var(--bg);
 }
 
 body {
+  min-width: 320px;
+  min-height: 100vh;
   margin: 0;
+  background:
+    radial-gradient(circle at 10% 0%, rgba(139, 92, 246, 0.16), transparent 32rem),
+    radial-gradient(circle at 92% 14%, rgba(56, 189, 248, 0.13), transparent 30rem),
+    radial-gradient(circle at 58% 100%, rgba(236, 72, 153, 0.08), transparent 34rem),
+    var(--bg);
+  color: var(--text-main);
+  font-family: var(--font-body);
+  transition: background-color 350ms ease, color 250ms ease;
 }
 
+:root.dark body {
+  background:
+    radial-gradient(circle at 12% -4%, rgba(139, 92, 246, 0.20), transparent 28rem),
+    radial-gradient(circle at 88% 8%, rgba(34, 211, 238, 0.18), transparent 26rem),
+    radial-gradient(circle at 55% 100%, rgba(244, 114, 182, 0.10), transparent 28rem),
+    linear-gradient(180deg, rgba(4, 8, 18, 1) 0%, rgba(7, 10, 20, 1) 100%);
+}
+
+/*
+ * Keep element defaults inside Tailwind's base layer.
+ * IMPORTANT: do not use the `font` shorthand here. An unlayered `font: inherit`
+ * overrides Tailwind utility font-size/font-weight/line-height because unlayered
+ * author CSS wins over declarations in Tailwind cascade layers.
+ */
+@layer base {
+  button, input, select, textarea {
+    font-family: var(--font-body);
+    font-style: normal;
+    font-synthesis: none;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-heading);
+    letter-spacing: -0.03em;
+  }
+
+  button { cursor: pointer; }
+
+  button:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible {
+    outline: 3px solid rgba(124, 108, 255, 0.24);
+    outline-offset: 2px;
+  }
+}
+
+::selection { background: rgba(124, 108, 255, 0.26); }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: rgba(100, 116, 139, 0.35);
+  background-clip: padding-box;
+}
+
+@keyframes pageEnter {
+  from { opacity: 0; transform: translateY(10px); filter: blur(4px); }
+  to { opacity: 1; transform: translateY(0); filter: blur(0); }
+}
+@keyframes modalBackdrop { from { opacity: 0; } to { opacity: 1; } }
+@keyframes modalPanel {
+  from { opacity: 0; transform: translateY(14px) scale(.975); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes statusPulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+@keyframes ambientFloat {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  50% { transform: translate3d(0, -18px, 0); }
+}
+
+.animate-page-enter { animation: pageEnter 420ms cubic-bezier(.2,.75,.2,1) both; }
+.animate-modal-backdrop { animation: modalBackdrop 180ms ease-out both; }
+.animate-modal-panel { animation: modalPanel 260ms cubic-bezier(.2,.8,.2,1) both; }
+.animate-status-pulse { animation: statusPulse 1.8s ease-in-out infinite; }
+.animate-ambient-float { animation: ambientFloat 9s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}
+
+
+/* Global element defaults kept intentionally small; component visuals live in Tailwind utilities. */
 #root {
-  width: 1126px;
-  max-width: 100%;
-  margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
-  min-height: 100svh;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
+  width: 100%;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
 }
 
-h1,
-h2 {
-  font-family: var(--heading);
-  font-weight: 500;
-  color: var(--text-h);
+
+@layer base {
+  input::placeholder, textarea::placeholder {
+    color: var(--text-soft);
+  }
+
+  input:focus, select:focus, textarea:focus {
+    border-color: rgba(124, 108, 255, 0.52);
+    box-shadow: 0 0 0 4px rgba(124, 108, 255, 0.11);
+  }
+
+  table, thead, tbody, tr, td, th {
+    border-color: var(--border-soft);
+  }
+
+  th { color: var(--text-muted); }
+  td { color: var(--text-main); }
 }
 
-h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
+
+/* Legacy animation keyframes retained for Tailwind arbitrary animation utilities. */
+@keyframes mosaic-pulse {
+  0% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.45;
+    transform: scale(1.25);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1);
   }
 }
-h2 {
-  font-size: 24px;
-  line-height: 118%;
-  letter-spacing: -0.24px;
-  margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
+@keyframes liquidGlassSweep {
+  0%, 35% { background-position: 180% 0; opacity: .22; }
+  60%, 100% { background-position: -80% 0; opacity: .48; }
+}
+@keyframes liquidMaterialize {
+  from { opacity: 0; filter: blur(12px); transform: translateY(18px) scale(.975); }
+  to { opacity: 1; filter: blur(0); transform: translateY(0) scale(1); }
+}
+@keyframes controlIslandRise {
+  from { opacity: 0; filter: blur(12px); transform: translateY(22px) scale(.94); }
+  to { opacity: 1; filter: blur(0); transform: translateY(0) scale(1); }
+}
+@keyframes contentFieldRise {
+  from { opacity: 0; transform: translateY(18px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes orbitSpin { to { transform: translate(-50%, -50%) rotate(360deg); } }
+@keyframes orbitSpinReverse { to { transform: translate(-50%, -50%) rotate(-360deg); } }
+@keyframes orbitBreathe { 50% { opacity: .55; transform: translate(-50%, -50%) scale(1.12); } }
+@keyframes coreRefraction { 0%, 20% { transform: translateX(-60%); } 55%, 100% { transform: translateX(60%); } }
+
+@keyframes pageShellFade {
+  from { opacity: .72; filter: blur(3px); }
+  to { opacity: 1; filter: blur(0); }
+}
+@keyframes pageElementUnfold {
+  0% {
+    opacity: 0;
+    filter: blur(5px);
+    clip-path: inset(0 0 100% 0 round 18px);
+    transform: translate3d(0, 10px, 0);
+  }
+  100% {
+    opacity: 1;
+    filter: blur(0);
+    clip-path: inset(0 0 0 0 round 18px);
+    transform: translate3d(0, 0, 0);
   }
 }
-p {
-  margin: 0;
+@keyframes pageShellFadeNext {
+  from { opacity: .78; filter: blur(2px); transform: translate3d(8px,0,0); }
+  to { opacity: 1; filter: blur(0); transform: translate3d(0,0,0); }
+}
+@keyframes pageShellFadePrev {
+  from { opacity: .78; filter: blur(2px); transform: translate3d(-8px,0,0); }
+  to { opacity: 1; filter: blur(0); transform: translate3d(0,0,0); }
+}
+@keyframes pageElementUnfoldNext {
+  0% {
+    opacity: 0;
+    filter: blur(4px);
+    clip-path: inset(0 100% 0 0 round 18px);
+    transform: translate3d(14px, 0, 0);
+  }
+  100% {
+    opacity: 1;
+    filter: blur(0);
+    clip-path: inset(0 0 0 0 round 18px);
+    transform: translate3d(0, 0, 0);
+  }
+}
+@keyframes pageElementUnfoldPrev {
+  0% {
+    opacity: 0;
+    filter: blur(4px);
+    clip-path: inset(0 0 0 100% round 18px);
+    transform: translate3d(-14px, 0, 0);
+  }
+  100% {
+    opacity: 1;
+    filter: blur(0);
+    clip-path: inset(0 0 0 0 round 18px);
+    transform: translate3d(0, 0, 0);
+  }
 }
 
-code,
-.counter {
-  font-family: var(--mono);
-  display: inline-flex;
-  border-radius: 4px;
-  color: var(--text-h);
+@keyframes deckRevealNext {
+  from { opacity: .72; filter: blur(3px); }
+  to { opacity: 1; filter: blur(0); }
+}
+@keyframes deckRevealPrev {
+  from { opacity: .72; filter: blur(3px); }
+  to { opacity: 1; filter: blur(0); }
+}
+@keyframes deckLensPass {
+  0% { opacity: 0; transform: translate3d(-110%,0,0); }
+  32% { opacity: .35; }
+  100% { opacity: 0; transform: translate3d(110%,0,0); }
+}
+@keyframes deckLensPassReverse {
+  0% { opacity: 0; transform: translate3d(110%,0,0); }
+  32% { opacity: .35; }
+  100% { opacity: 0; transform: translate3d(-110%,0,0); }
+}
+@keyframes eventExpandSlide {
+  0% {
+    opacity: 0;
+    transform: translateY(-8px) scaleY(0.98);
+    max-height: 0;
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0) scaleY(1);
+    max-height: 1200px;
+  }
+}
+@keyframes eventDetailFade {
+  0% {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes eventExpandedOpen {
+  0% {
+    opacity: 0;
+    max-height: 0;
+    transform: translateY(-8px) scaleY(0.98);
+  }
+
+  100% {
+    opacity: 1;
+    max-height: 3200px;
+    transform: translateY(0) scaleY(1);
+  }
+}
+@keyframes eventExpandedClose {
+  0% {
+    opacity: 1;
+    max-height: 3200px;
+    transform: translateY(0) scaleY(1);
+  }
+
+  100% {
+    opacity: 0;
+    max-height: 0;
+    transform: translateY(-8px) scaleY(0.98);
+  }
+}
+@keyframes ifRuleGeneratedFade {
+  0% {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes submenuReveal {
+  from { opacity: 0; transform: translateY(-5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes cardReveal {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes healthRibbonReveal {
+  from { opacity: 0; transform: translate3d(0, 18px, 0) scale(.985); }
+  to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+}
+@keyframes pulseBarRise {
+  from { opacity: .18; transform: scaleY(.08); }
+  to { opacity: 1; transform: scaleY(1); }
+}
+@keyframes sectionDeckNext {
+  from { opacity: .72; filter: blur(3px); }
+  to { opacity: 1; filter: blur(0); }
+}
+@keyframes sectionDeckPrev {
+  from { opacity: .72; filter: blur(3px); }
+  to { opacity: 1; filter: blur(0); }
+}
+@keyframes glassCardIn {
+  from { opacity: 0; filter: blur(5px); transform: translate3d(0, 10px, 0); }
+  to { opacity: 1; filter: blur(0); transform: translate3d(0, 0, 0); }
 }
 
-code {
-  font-size: 15px;
-  line-height: 135%;
-  padding: 4px 8px;
-  background: var(--code-bg);
+@keyframes glassSheenPass {
+  0%, 30% { opacity: 0; transform: translate3d(-48%,0,0); }
+  48% { opacity: .7; }
+  72%, 100% { opacity: 0; transform: translate3d(48%,0,0); }
 }
+@keyframes navIconPop {
+  0% { transform: scale(.82) rotate(-8deg); opacity: .45; }
+  65% { transform: scale(1.12) rotate(2deg); opacity: 1; }
+  100% { transform: scale(1) rotate(0); opacity: 1; }
+}
+@keyframes lwPane{from{opacity:.1;transform:translateX(-8px)}to{opacity:1;transform:translateX(0)}}
+@keyframes lwRow{from{opacity:0}to{opacity:1}}
+@keyframes opnOverviewPulse {
+  0% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(1.25);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes secPulse {
+  0% { opacity: 1; transform: scale(1); }
+  50% { opacity: .45; transform: scale(1.25); }
+  100% { opacity: 1; transform: scale(1); }
+}
+@keyframes vpDetail{from{opacity:.2;transform:translateX(-6px)}to{opacity:1;transform:translateX(0)}}

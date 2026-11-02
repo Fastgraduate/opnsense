@@ -1,0 +1,98 @@
+# OPNsense firewall/filterlog -> Elasticsearch
+#
+# OPNsense의 원격 Syslog 대상에서 firewall/filterlog 로그를 이 Logstash 서버의
+# UDP 5514 포트로 전송하도록 설정한 뒤 사용합니다.
+# 실제 포트/인증서/계정은 환경에 맞게 변경하세요.
+
+input {
+  udp {
+    port => 5514
+    type => "opnsense-firewall"
+    codec => plain { charset => "UTF-8" }
+  }
+}
+
+filter {
+  if [type] == "opnsense-firewall" {
+    # BSD/RFC5424 어느 쪽이든 filterlog 뒤의 CSV payload만 추출합니다.
+    ruby {
+      code => '
+        require "csv"
+        text = event.get("message").to_s
+        body = nil
+
+        if (m = text.match(/filterlog(?:\[\d+\])?:\s*(.*)$/i))
+          body = m[1]
+        elsif (m = text.match(/\sfilterlog\s+-\s+-\s+-\s+(.*)$/i))
+          body = m[1]
+        end
+
+        unless body
+          event.cancel
+          next
+        end
+
+        begin
+          parts = CSV.parse_line(body) || []
+        rescue
+          parts = body.split(",")
+        end
+        parts = parts.map { |v| v.to_s.strip }
+
+        getv = lambda do |idx, default_value = ""
+          value = idx < parts.length ? parts[idx].to_s.strip : ""
+          value.empty? ? default_value : value
+        end
+
+        action = getv.call(6, "-").downcase
+        iface = getv.call(4, "-")
+        reason = getv.call(5, "-")
+        direction = getv.call(7, "-").downcase
+        ip_version = getv.call(8, "-")
+        protocol = getv.call(16, "-").downcase
+        packet_length = getv.call(17, "")
+        src_ip = getv.call(18, "-")
+        dst_ip = getv.call(19, "-")
+        src_port = getv.call(20, "")
+        dst_port = getv.call(21, "")
+        rule_no = getv.call(0, "-")
+        tracker = getv.call(3, "-")
+
+        event.set("[event][dataset]", "opnsense.firewall")
+        event.set("[event][category]", "network")
+        event.set("[event][action]", action)
+        event.set("[network][direction]", direction)
+        event.set("[network][transport]", protocol)
+        event.set("[observer][ingress][interface][name]", iface)
+        event.set("[source][ip]", src_ip) unless src_ip == "-"
+        event.set("[destination][ip]", dst_ip) unless dst_ip == "-"
+        event.set("[source][port]", src_port.to_i) unless src_port.empty?
+        event.set("[destination][port]", dst_port.to_i) unless dst_port.empty?
+        event.set("[rule][id]", rule_no)
+        event.set("[rule][name]", "filterlog rule #{rule_no}")
+        event.set("[opnsense][firewall][action]", action)
+        event.set("[opnsense][firewall][interface]", iface)
+        event.set("[opnsense][firewall][direction]", direction)
+        event.set("[opnsense][firewall][protocol]", protocol)
+        event.set("[opnsense][firewall][reason]", reason)
+        event.set("[opnsense][firewall][tracker]", tracker)
+        event.set("[opnsense][firewall][ip_version]", ip_version)
+        event.set("[opnsense][firewall][packet_length]", packet_length.to_i) unless packet_length.empty?
+        event.set("[event][original]", text)
+      '
+    }
+  }
+}
+
+output {
+  if [type] == "opnsense-firewall" {
+    elasticsearch {
+      hosts => ["https://localhost:9200"]
+      user => "elastic"
+      password => "123456"
+      ssl_enabled => true
+      ssl_certificate_authorities => "/etc/logstash/certs/http_ca.crt"
+      index => "opnsense-firewall-%{+YYYY.MM.dd}"
+    }
+  }
+}
